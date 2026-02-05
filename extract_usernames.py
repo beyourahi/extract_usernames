@@ -1,104 +1,79 @@
 #!/usr/bin/env python3
 
-"""
-Instagram Username Extractor - Multi-Pass OCR System (PARALLEL VERSION)
-========================================================================
-
-PURPOSE:
-This script extracts Instagram usernames from screenshot images using advanced
-OCR (Optical Character Recognition) techniques with Tesseract.
-
-PERFORMANCE:
-🚀 PARALLEL PROCESSING: Uses multiple CPU cores for 4-8x speedup
-- 4 cores: ~3.5x faster
-- 8 cores: ~6-7x faster
-- 16 cores: ~10-12x faster
-
-KEY FEATURES:
-- Multi-core parallel processing for maximum speed
-- Multi-pass OCR: 5 preprocessing methods × 3 PSM modes = 15 attempts per image
-- Voting system: Selects most common result across all OCR attempts
-- Instagram verification: Validates usernames by checking profile URLs
-- Duplicate detection: Skips already-processed usernames across runs
-- Incremental updates: Appends new results without overwriting existing data
-
-USAGE:
-    python3 extract_usernames.py                    # Uses default: ~/Desktop/leads_images
-    python3 extract_usernames.py my_folder         # Uses ~/Desktop/my_folder
-    python3 extract_usernames.py /path/to/folder   # Uses absolute path
-
-AUTHOR: Rahi Khan (Dropout Studio)
-REPO: https://github.com/beyourahi/extract_usernames
-"""
-
 import os
 import re
 import time
 import shutil
 import argparse
+import platform
 from pathlib import Path
 from PIL import Image
 import cv2
 import numpy as np
-import pytesseract
+import easyocr
 import requests
+import torch
 from datetime import datetime
-from collections import Counter
 from multiprocessing import Pool, cpu_count
 
 
-# ============================================================================
-# CONFIGURATION CONSTANTS
-# ============================================================================
-# These values control how the script processes images and extracts usernames.
-# Adjust these if your screenshots have different dimensions or layouts.
+TOP_OFFSET = 165
+CROP_HEIGHT = 90
+LEFT_MARGIN = 100
+RIGHT_MARGIN = 100
 
-# Image cropping parameters (in pixels)
-TOP_OFFSET = 165          # Distance from top edge to start of username area
-CROP_HEIGHT = 90          # Height of the region containing username
-LEFT_MARGIN = 100         # Left padding to exclude from crop
-RIGHT_MARGIN = 100        # Right padding to exclude from crop
-
-# OCR confidence threshold (percentage)
-CONFIDENCE_THRESHOLD = 60 # Minimum confidence to auto-verify (0-100)
-
-# Output directory (results are saved here)
 OUTPUT_DIR = Path.home() / "Desktop" / "leads"
-
-# Debug directory (temporary, auto-deleted after run)
 DEBUG_DIR = Path.home() / "Desktop" / "ocr_debug"
 
-# Ensure output directories exist
 DEBUG_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Output file paths
 VERIFIED_FILE = OUTPUT_DIR / "verified_usernames.md"
 REVIEW_FILE = OUTPUT_DIR / "needs_review.md"
 REPORT_FILE = OUTPUT_DIR / "extraction_report.md"
 
 
-# ============================================================================
-# COMMAND-LINE ARGUMENT PARSING
-# ============================================================================
+def detect_hardware():
+    hardware_info = {
+        'device': 'cpu',
+        'device_name': 'CPU',
+        'gpu_available': False,
+        'gpu_type': None,
+        'architecture': platform.machine(),
+        'platform': platform.system(),
+        'cpu_cores': cpu_count(),
+        'optimal_workers': min(4, max(1, cpu_count() - 1))
+    }
+    
+    if torch.cuda.is_available():
+        hardware_info['device'] = 'cuda'
+        hardware_info['device_name'] = torch.cuda.get_device_name(0)
+        hardware_info['gpu_available'] = True
+        
+        device_name_upper = hardware_info['device_name'].upper()
+        if 'AMD' in device_name_upper or 'RADEON' in device_name_upper:
+            hardware_info['gpu_type'] = 'AMD ROCm'
+        else:
+            hardware_info['gpu_type'] = 'NVIDIA CUDA'
+        
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        hardware_info['device'] = 'mps'
+        hardware_info['device_name'] = f"Apple Silicon GPU ({platform.processor()})"
+        hardware_info['gpu_available'] = True
+        hardware_info['gpu_type'] = 'Apple Metal (MPS)'
+        
+    else:
+        hardware_info['device'] = 'cpu'
+        hardware_info['device_name'] = f"{cpu_count()}-core CPU"
+        hardware_info['gpu_available'] = False
+        hardware_info['gpu_type'] = None
+    
+    return hardware_info
+
 
 def parse_arguments():
-    """
-    Parse command-line arguments to get input directory.
-    
-    PARAMETERS:
-    - folder_name (optional): Name of folder on Desktop or absolute path
-    
-    RETURNS:
-    - Path object: Resolved input directory path
-    
-    EXAMPLES:
-    - No argument: Uses ~/Desktop/leads_images
-    - 'screenshots': Uses ~/Desktop/screenshots
-    - '/Users/name/pics': Uses /Users/name/pics
-    """
     parser = argparse.ArgumentParser(
-        description='Extract Instagram usernames from screenshot images using parallel OCR',
+        description='Extract Instagram usernames from screenshots using universal GPU/CPU acceleration',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -110,48 +85,25 @@ Examples:
     
     parser.add_argument(
         'folder',
-        nargs='?',  # Makes argument optional
+        nargs='?',
         default='leads_images',
         help='Folder name (on Desktop) or absolute path to images (default: leads_images)'
     )
     
     args = parser.parse_args()
-    
-    # Determine if path is absolute or relative to Desktop
     folder_path = Path(args.folder)
     
     if folder_path.is_absolute():
-        # User provided absolute path
         input_dir = folder_path
     else:
-        # User provided folder name - assume it's on Desktop
         input_dir = Path.home() / "Desktop" / args.folder
     
     return input_dir
 
 
-# ============================================================================
-# DUPLICATE DETECTION
-# ============================================================================
-
 def load_existing_usernames():
-    """
-    Load previously extracted usernames from output files to prevent duplicates.
-    
-    This function reads both verified_usernames.md and needs_review.md files
-    and extracts all usernames already processed in previous runs.
-    
-    RETURNS:
-    - set: Collection of unique usernames already in the system
-    
-    PURPOSE FOR AI AGENTS:
-    This prevents re-processing the same username multiple times across
-    different batch runs, saving time and maintaining data integrity.
-    """
     existing_usernames = set()
     
-    # Pattern explanation for verified file: "123. username - https://..."
-    # Regex breakdown: ^\d+\.\s+ (number + dot + space) + (\w+(?:[._]\w+)*) (username) + \s+-\s+https?://
     if VERIFIED_FILE.exists():
         with open(VERIFIED_FILE, 'r', encoding='utf-8') as f:
             for line in f:
@@ -159,8 +111,6 @@ def load_existing_usernames():
                 if match:
                     existing_usernames.add(match.group(1))
     
-    # Pattern explanation for review file: "123. **username** - ..."
-    # Regex breakdown: ^\d+\.\s+ (number + dot + space) + \*\*(\w+(?:[._]\w+)*)\*\* (bold username)
     if REVIEW_FILE.exists():
         with open(REVIEW_FILE, 'r', encoding='utf-8') as f:
             for line in f:
@@ -171,379 +121,156 @@ def load_existing_usernames():
     return existing_usernames
 
 
-# ============================================================================
-# IMAGE PREPROCESSING TECHNIQUES
-# ============================================================================
-# These functions apply different preprocessing methods to enhance text clarity
-# before OCR extraction. Each method works better for different image conditions.
-
-def preprocess_adaptive_gaussian(img):
-    """
-    Adaptive Gaussian Thresholding - Best for varying lighting conditions.
-    
-    PROCESS:
-    1. Convert to grayscale
-    2. Denoise to remove artifacts
-    3. Upscale 6x for better character recognition
-    4. Apply adaptive threshold (adjusts per image region)
-    5. Morphological closing to connect character fragments
-    
-    USE CASE: Images with uneven lighting or gradient backgrounds
-    """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+def preprocess_image(img_cv):
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
     denoised = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
-    upscaled = cv2.resize(denoised, None, fx=6, fy=6, interpolation=cv2.INTER_CUBIC)
+    upscaled = cv2.resize(denoised, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
     thresh = cv2.adaptiveThreshold(upscaled, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 8)
     kernel = np.ones((2, 2), np.uint8)
-    return cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    processed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    return processed
 
 
-def preprocess_otsu(img):
-    """
-    Otsu's Binarization - Automatic threshold detection.
-    
-    PROCESS:
-    1. Convert to grayscale
-    2. Denoise
-    3. Upscale 6x
-    4. Apply Gaussian blur to smooth edges
-    5. Otsu's method automatically determines optimal threshold
-    
-    USE CASE: Images with bimodal histograms (clear foreground/background)
-    """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
-    upscaled = cv2.resize(denoised, None, fx=6, fy=6, interpolation=cv2.INTER_CUBIC)
-    blurred = cv2.GaussianBlur(upscaled, (5, 5), 0)
-    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return thresh
+def initialize_ocr_reader(use_gpu=True):
+    return easyocr.Reader(
+        ['en'],
+        gpu=use_gpu,
+        verbose=False,
+        quantize=False,
+        download_enabled=True
+    )
 
 
-def preprocess_clahe(img):
-    """
-    CLAHE (Contrast Limited Adaptive Histogram Equalization) - Enhanced contrast.
-    
-    PROCESS:
-    1. Convert to grayscale
-    2. Denoise
-    3. Upscale 7x (higher for better detail)
-    4. Apply CLAHE to enhance local contrast
-    5. Otsu's threshold
-    6. Morphological closing
-    
-    USE CASE: Low contrast images or faded screenshots
-    """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
-    upscaled = cv2.resize(denoised, None, fx=7, fy=7, interpolation=cv2.INTER_CUBIC)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(upscaled)
-    _, thresh = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    kernel = np.ones((2, 2), np.uint8)
-    return cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+_ocr_reader = None
+
+def get_ocr_reader(use_gpu=True):
+    global _ocr_reader
+    if _ocr_reader is None:
+        _ocr_reader = initialize_ocr_reader(use_gpu)
+    return _ocr_reader
 
 
-def preprocess_bilateral(img):
-    """
-    Bilateral Filter - Preserves edges while removing noise.
-    
-    PROCESS:
-    1. Convert to grayscale
-    2. Apply bilateral filter (noise reduction with edge preservation)
-    3. Upscale 6x
-    4. Otsu's threshold
-    
-    USE CASE: Images with noise but clear text edges
-    """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    filtered = cv2.bilateralFilter(gray, 9, 75, 75)
-    upscaled = cv2.resize(filtered, None, fx=6, fy=6, interpolation=cv2.INTER_CUBIC)
-    _, thresh = cv2.threshold(upscaled, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return thresh
-
-
-def preprocess_adaptive_mean(img):
-    """
-    Adaptive Mean Thresholding - Local averaging method.
-    
-    PROCESS:
-    1. Convert to grayscale
-    2. Denoise
-    3. Upscale 6x
-    4. Adaptive threshold using mean of neighborhood
-    
-    USE CASE: Images with varying lighting but uniform text
-    """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
-    upscaled = cv2.resize(denoised, None, fx=6, fy=6, interpolation=cv2.INTER_CUBIC)
-    thresh = cv2.adaptiveThreshold(upscaled, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 21, 10)
-    return thresh
-
-
-# ============================================================================
-# OCR EXTRACTION
-# ============================================================================
-
-def ocr_tesseract_multipass(img_cv, save_debug_path=None):
-    """
-    Run Tesseract OCR with multiple preprocessing methods and configurations.
-    
-    This function applies 5 preprocessing techniques, each tested with 3 different
-    Tesseract PSM (Page Segmentation Mode) values, resulting in 15 total attempts.
-    
-    PSM MODES EXPLAINED:
-    - PSM 7: Treat image as single text line
-    - PSM 8: Treat image as single word
-    - PSM 13: Raw line without special optimizations
-    
-    PARAMETERS:
-    - img_cv: OpenCV image (BGR format)
-    - save_debug_path: Optional path to save preprocessed image for debugging
-    
-    RETURNS:
-    - list: All extracted username candidates
-    
-    PURPOSE FOR AI AGENTS:
-    Multiple passes compensate for varying image quality. The voting system
-    (implemented in calling function) selects the most common result.
-    """
-    # Define all preprocessing methods
-    preprocessing_methods = [
-        ('adaptive_gaussian', preprocess_adaptive_gaussian),
-        ('otsu', preprocess_otsu),
-        ('clahe', preprocess_clahe),
-        ('bilateral', preprocess_bilateral),
-        ('adaptive_mean', preprocess_adaptive_mean),
-    ]
-    
-    # Tesseract PSM (Page Segmentation Mode) values to try
-    psm_modes = [7, 8, 13]
-    
-    # Collect all results from every combination
-    all_results = []
-    
-    # Loop through each preprocessing method
-    for method_name, preprocess_func in preprocessing_methods:
-        # Apply preprocessing
-        processed = preprocess_func(img_cv.copy())
+def ocr_extract_username(img_cv, use_gpu=True):
+    try:
+        reader = get_ocr_reader(use_gpu)
+        processed = preprocess_image(img_cv)
+        results = reader.readtext(processed)
         
-        # Save debug image (only for first method, only for first 5 images)
-        if save_debug_path and method_name == 'adaptive_gaussian':
-            cv2.imwrite(str(save_debug_path), processed)
+        best_username = None
+        best_confidence = 0
         
-        # Convert to PIL format (required by pytesseract)
-        pil_img = Image.fromarray(processed)
-        
-        # Try each PSM mode
-        for psm in psm_modes:
-            # Tesseract configuration:
-            # --psm: Page segmentation mode
-            # --oem 3: Use LSTM neural net mode
-            # -c tessedit_char_whitelist: Only allow these characters
-            config = f'--psm {psm} --oem 3 -c tessedit_char_whitelist=abcdefghijklmnopqrstuvwxyz0123456789._'
-            
-            # Run OCR
-            text = pytesseract.image_to_string(pil_img, config=config).strip()
-            
-            # Clean and validate
+        for (bbox, text, confidence) in results:
             username = clean_username(text)
-            
-            # Add to results if valid
-            if username:
-                all_results.append(username)
-    
-    return all_results
+            if username and confidence > best_confidence:
+                best_username = username
+                best_confidence = confidence * 100
+        
+        return best_username, best_confidence
+        
+    except Exception as e:
+        print(f"   OCR Error: {e}")
+        return None, 0
 
-
-# ============================================================================
-# USERNAME VALIDATION
-# ============================================================================
 
 def clean_username(text):
-    """
-    Clean and validate extracted text as Instagram username.
-    
-    INSTAGRAM USERNAME RULES:
-    - Length: 1-30 characters
-    - Allowed characters: letters, numbers, periods, underscores
-    - Must start with alphanumeric (not . or _)
-    - Cannot end with period
-    - Must contain at least one alphanumeric character
-    
-    PARAMETERS:
-    - text: Raw extracted text from OCR
-    
-    RETURNS:
-    - str: Valid username, or None if invalid
-    
-    PURPOSE FOR AI AGENTS:
-    This function filters out OCR errors and ensures only valid Instagram
-    usernames are considered. Invalid formats are rejected early.
-    """
     if not text:
         return None
     
-    # Convert to lowercase and remove whitespace
     text = text.lower().strip()
     text = re.sub(r'\s+', '', text)
-    
-    # Remove invalid characters (keep only alphanumeric, period, underscore)
     text = re.sub(r'[^\w._]', '', text)
-    
-    # Remove leading/trailing dots and underscores
     text = text.strip('._')
     
-    # Check length constraints
     if len(text) < 1 or len(text) > 30:
         return None
     
-    # Must start with alphanumeric character
     if text and not text[0].isalnum():
         return None
     
-    # Cannot end with period
     if text.endswith('.'):
         return None
     
-    # Must contain at least one alphanumeric character
     if not any(c.isalnum() for c in text):
         return None
     
     return text
 
 
-# ============================================================================
-# INSTAGRAM VERIFICATION
-# ============================================================================
-
 def check_instagram_exists(username):
-    """
-    Verify if Instagram profile exists by checking profile URL.
-    
-    METHOD:
-    Sends HTTP HEAD request to instagram.com/{username}/
-    - Status 200: Profile exists
-    - Other status: Profile doesn't exist or is private
-    - Exception: Network error (can't verify)
-    
-    PARAMETERS:
-    - username: Instagram username to verify
-    
-    RETURNS:
-    - True: Profile exists and is accessible
-    - False: Profile doesn't exist or is inaccessible
-    - None: Network error, verification failed
-    
-    PURPOSE FOR AI AGENTS:
-    This prevents false positives by confirming the username actually exists
-    on Instagram before marking it as verified.
-    """
     try:
         url = f"https://www.instagram.com/{username}/"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
         }
-        # Use HEAD request (faster than GET, only checks if resource exists)
         response = requests.head(url, headers=headers, timeout=5, allow_redirects=True)
         return response.status_code == 200
     except:
-        # Network error, timeout, or other exception
         return None
 
 
-# ============================================================================
-# PARALLEL PROCESSING - MAIN EXTRACTION LOGIC
-# ============================================================================
-
 def extract_username_from_image_parallel(args):
-    """
-    Wrapper function for parallel processing of images.
+    image_path, image_index, total_images, existing_usernames, use_gpu = args
     
-    This function is designed to work with multiprocessing.Pool.
-    It unpacks arguments and calls the main extraction function.
-    
-    PARAMETERS:
-    - args: Tuple of (image_path, image_index, total_images, existing_usernames)
-    
-    RETURNS:
-    - dict: Extraction result with metadata
-    
-    PURPOSE FOR AI AGENTS:
-    Multiprocessing requires functions to be picklable (serializable).
-    This wrapper handles argument unpacking and progress display.
-    """
-    image_path, image_index, total_images, existing_usernames = args
-    
-    # Extract username
-    result = extract_username_from_image(image_path, save_debug=(image_index <= 5))
+    result = extract_username_from_image(image_path, use_gpu, save_debug=(image_index <= 5))
     result['filename'] = image_path.name
     result['index'] = image_index
     
-    # Check for duplicate
     if result['username'] and result['username'] in existing_usernames:
         result['is_duplicate'] = True
     else:
         result['is_duplicate'] = False
     
-    # Format output message
-    status_icon = "⏭️" if result['is_duplicate'] else ("✅" if result['status'] == 'verified' else "⚠️" if result['username'] else "❌")
-    username_display = result['username'] if result['username'] else "Failed"
-    duplicate_text = " (duplicate)" if result['is_duplicate'] else ""
-    confidence_text = f" ({result['confidence']:.0f}%)" if result['username'] and not result['is_duplicate'] else ""
+    if result['is_duplicate']:
+        status_icon = "⏭️"
+        username_display = result['username']
+        detail_text = " (duplicate)"
+        
+    elif not result['username']:
+        status_icon = "❌"
+        username_display = "Failed"
+        detail_text = ""
+        
+    else:
+        username_display = result['username']
+        
+        if result['status'] == 'verified':
+            status_icon = "✅"
+            detail_text = f" ({result['confidence']:.0f}% | URL: ✅)"
+            
+        elif result['status'] == 'unverified':
+            status_icon = "⚠️"
+            detail_text = f" ({result['confidence']:.0f}% | URL: ⚠️ network error)"
+            
+        else:
+            status_icon = "⚠️"
+            url_icon = "✅" if result['verified'] == True else "❌" if result['verified'] == False else "⚠️"
+            detail_text = f" ({result['confidence']:.0f}% | URL: {url_icon})"
     
-    # Print progress
-    print(f"[{image_index}/{total_images}] {image_path.name} → {status_icon} {username_display}{duplicate_text}{confidence_text}")
+    print(f"[{image_index}/{total_images}] {image_path.name} → {status_icon} {username_display}{detail_text}")
     
     return result
 
 
-def extract_username_from_image(image_path, save_debug=True):
-    """
-    Extract username from a single image using multi-pass OCR.
-    
-    WORKFLOW:
-    1. Load image
-    2. Crop to username region (based on TOP_OFFSET, CROP_HEIGHT, margins)
-    3. Run multi-pass OCR (5 preprocessing × 3 PSM modes = 15 attempts)
-    4. Use voting system to select best result
-    5. Calculate confidence (% of votes for winning username)
-    6. Verify username exists on Instagram
-    7. Determine status (verified/unverified/review)
-    
-    PARAMETERS:
-    - image_path: Path to screenshot image
-    - save_debug: Whether to save preprocessed image for debugging
-    
-    RETURNS:
-    - dict: Contains username, confidence, verification status, and metadata
-    
-    PURPOSE FOR AI AGENTS:
-    This is the core extraction function. It coordinates all preprocessing,
-    OCR, validation, and verification steps for a single image.
-    """
+def extract_username_from_image(image_path, use_gpu=True, save_debug=False):
     try:
-        # Load image with OpenCV
         img_cv = cv2.imread(str(image_path))
         height, width = img_cv.shape[:2]
         
-        # Calculate crop boundaries
         left = LEFT_MARGIN
         top = TOP_OFFSET
         right = width - RIGHT_MARGIN
         bottom = top + CROP_HEIGHT
         
-        # Crop to username region
         cropped = img_cv[top:bottom, left:right]
         
-        # Set debug path (only for first 5 images)
-        debug_path = DEBUG_DIR / f"{image_path.stem}_crop.png" if save_debug else None
+        if save_debug:
+            debug_path = DEBUG_DIR / f"{image_path.stem}_crop.png"
+            preprocessed = preprocess_image(cropped)
+            cv2.imwrite(str(debug_path), preprocessed)
         
-        # Run multi-pass OCR
-        all_results = ocr_tesseract_multipass(cropped, debug_path)
+        username, confidence = ocr_extract_username(cropped, use_gpu)
         
-        # Check if any results were found
-        if not all_results:
+        if not username:
             return {
                 'username': None,
                 'confidence': 0,
@@ -551,37 +278,23 @@ def extract_username_from_image(image_path, save_debug=True):
                 'status': 'failed'
             }
         
-        # Voting system: count occurrences of each username
-        counter = Counter(all_results)
+        url_verified = check_instagram_exists(username)
         
-        # Select username with most votes (ties broken by length)
-        best_username = max(counter.items(), key=lambda x: (x[1], len(x[0])))[0]
-        vote_count = counter[best_username]
-        total_votes = len(all_results)
-        confidence = (vote_count / total_votes) * 100
-        
-        # Verify username exists on Instagram
-        url_verified = check_instagram_exists(best_username)
-        
-        # Determine status based on confidence and verification
-        if confidence >= CONFIDENCE_THRESHOLD and url_verified == True:
-            status = 'verified'  # High confidence + URL exists
-        elif confidence >= CONFIDENCE_THRESHOLD and url_verified == None:
-            status = 'unverified'  # High confidence but couldn't verify URL
+        if confidence >= 60 and url_verified == True:
+            status = 'verified'
+        elif confidence >= 60 and url_verified == None:
+            status = 'unverified'
         else:
-            status = 'review'  # Low confidence or URL doesn't exist
+            status = 'review'
         
-        # Return all metadata
         return {
-            'username': best_username,
+            'username': username,
             'confidence': confidence,
             'verified': url_verified,
-            'status': status,
-            'all_candidates': dict(counter)  # All alternatives found
+            'status': status
         }
         
     except Exception as e:
-        # Handle any unexpected errors
         return {
             'username': None,
             'confidence': 0,
@@ -591,32 +304,7 @@ def extract_username_from_image(image_path, save_debug=True):
         }
 
 
-# ============================================================================
-# OUTPUT FILE MANAGEMENT
-# ============================================================================
-
 def append_to_files(new_results, existing_usernames):
-    """
-    Append only new (non-duplicate) usernames to output files.
-    
-    This function handles incremental updates, ensuring:
-    - Duplicates are not added
-    - Line numbering continues from previous runs
-    - Headers are updated with new totals
-    - Both verified and review files are updated
-    
-    PARAMETERS:
-    - new_results: List of extraction results from current run
-    - existing_usernames: Set of usernames already in files
-    
-    RETURNS:
-    - tuple: (new_verified_count, new_review_count)
-    
-    PURPOSE FOR AI AGENTS:
-    This enables cumulative extraction across multiple runs without data loss
-    or duplication. Previous results are preserved and extended.
-    """
-    # Filter out duplicates - only keep new usernames
     new_verified = [r for r in new_results 
                    if r['status'] == 'verified' 
                    and not r.get('is_duplicate', False)]
@@ -625,9 +313,7 @@ def append_to_files(new_results, existing_usernames):
                  if r['status'] in ['review', 'unverified', 'error'] 
                  and not r.get('is_duplicate', False)]
     
-    # ---- Append to verified file ----
     if new_verified:
-        # Count existing entries to continue numbering
         current_count = 0
         if VERIFIED_FILE.exists():
             with open(VERIFIED_FILE, 'r', encoding='utf-8') as f:
@@ -635,25 +321,19 @@ def append_to_files(new_results, existing_usernames):
                     if re.match(r'^\d+\.', line):
                         current_count += 1
         
-        # Append new entries
         with open(VERIFIED_FILE, 'a', encoding='utf-8') as f:
-            # Add header if file is new or empty
             if not VERIFIED_FILE.exists() or VERIFIED_FILE.stat().st_size == 0:
                 f.write("# Verified Instagram Usernames\n\n")
                 f.write(f"**Last Updated:** {datetime.now().strftime('%B %d, %Y at %I:%M %p')}\n\n")
                 f.write("---\n\n")
             
-            # Write new usernames with continued numbering
             for i, item in enumerate(new_verified, current_count + 1):
                 url = f"https://www.instagram.com/{item['username']}"
                 f.write(f"{i}. {item['username']} - {url}\n")
         
-        # Update total count in header
         update_file_header(VERIFIED_FILE, current_count + len(new_verified))
     
-    # ---- Append to review file ----
     if new_review:
-        # Count existing entries
         current_count = 0
         if REVIEW_FILE.exists():
             with open(REVIEW_FILE, 'r', encoding='utf-8') as f:
@@ -661,15 +341,12 @@ def append_to_files(new_results, existing_usernames):
                     if re.match(r'^\d+\.\s+\*\*', line):
                         current_count += 1
         
-        # Append new entries
         with open(REVIEW_FILE, 'a', encoding='utf-8') as f:
-            # Add header if file is new or empty
             if not REVIEW_FILE.exists() or REVIEW_FILE.stat().st_size == 0:
                 f.write("# Usernames Needing Manual Review\n\n")
                 f.write(f"**Last Updated:** {datetime.now().strftime('%B %d, %Y at %I:%M %p')}\n\n")
                 f.write("---\n\n")
             
-            # Write new usernames with metadata
             for i, item in enumerate(new_review, current_count + 1):
                 username = item['username'] or 'FAILED'
                 url = f"https://www.instagram.com/{username}" if item['username'] else "N/A"
@@ -677,291 +354,194 @@ def append_to_files(new_results, existing_usernames):
                 verified = "✅" if item['verified'] == True else "❌" if item['verified'] == False else "⚠️"
                 filename = item.get('filename', 'Unknown')
                 
-                # Write entry with all metadata
                 f.write(f"{i}. **{username}** - {url}\n")
                 f.write(f"   - **Image:** `{filename}`\n")
-                f.write(f"   - Confidence: {confidence:.0f}% | URL: {verified}\n")
-                
-                # Include alternative candidates if multiple were found
-                if 'all_candidates' in item and len(item['all_candidates']) > 1:
-                    alternatives = [f"{k}({v})" for k, v in item['all_candidates'].items()]
-                    f.write(f"   - Alternatives: {', '.join(alternatives)}\n")
-                
-                f.write("\n")
+                f.write(f"   - Confidence: {confidence:.0f}% | URL: {verified}\n\n")
         
-        # Update total count in header
         update_file_header(REVIEW_FILE, current_count + len(new_review))
     
     return len(new_verified), len(new_review)
 
 
 def update_file_header(file_path, new_total):
-    """
-    Update the total count and timestamp in file header.
-    
-    This function reads the file, updates the "Total" and "Last Updated" lines,
-    and writes it back. Maintains header formatting while updating statistics.
-    
-    PARAMETERS:
-    - file_path: Path to markdown file to update
-    - new_total: New total count to display in header
-    
-    PURPOSE FOR AI AGENTS:
-    Keeps file headers accurate after appending new entries. Users see
-    current totals without manually counting.
-    """
     if not file_path.exists():
         return
     
-    # Read entire file
     with open(file_path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
     
-    # Update relevant header lines
-    for i, line in enumerate(lines):
-        # Update total count
-        if line.startswith('**Total Verified:**') or line.startswith('**Total Needing Review:**'):
-            lines[i] = f"**Total:** {new_total}\n"
-        # Update timestamp
-        elif line.startswith('**Last Updated:**') or line.startswith('**Generated:**'):
-            lines[i] = f"**Last Updated:** {datetime.now().strftime('%B %d, %Y at %I:%M %p')}\n"
+    timestamp = datetime.now().strftime('%B %d, %Y at %I:%M %p')
     
-    # Write back
+    updated_lines = []
+    for line in lines:
+        if line.startswith('**Last Updated:**'):
+            updated_lines.append(f"**Last Updated:** {timestamp}\n")
+        elif line.startswith('**Total:**'):
+            updated_lines.append(f"**Total:** {new_total}\n")
+        else:
+            updated_lines.append(line)
+    
+    if '**Total:**' not in ''.join(updated_lines):
+        for i, line in enumerate(updated_lines):
+            if line.startswith('**Last Updated:**'):
+                updated_lines.insert(i + 1, f"**Total:** {new_total}\n")
+                break
+    
     with open(file_path, 'w', encoding='utf-8') as f:
-        f.writelines(lines)
+        f.writelines(updated_lines)
 
 
-def create_report(total_processed, new_verified, new_review, skipped, elapsed_time, num_workers):
-    """
-    Create extraction report for current run.
+def generate_report(hardware_info, input_dir, results, elapsed_time, new_verified, new_review):
+    total = len(results)
+    verified = sum(1 for r in results if r['status'] == 'verified')
+    review = sum(1 for r in results if r['status'] in ['review', 'unverified'])
+    failed = sum(1 for r in results if r['status'] in ['failed', 'error'])
+    duplicates = sum(1 for r in results if r.get('is_duplicate', False))
     
-    Generates a summary markdown file showing:
-    - Number of images processed
-    - New usernames added to each file
-    - Number of duplicates skipped
-    - Processing time and speed
-    - Parallel processing stats
-    - References to output files
+    avg_confidence = sum(r['confidence'] for r in results if r['username']) / max(1, total - failed)
+    images_per_second = total / elapsed_time if elapsed_time > 0 else 0
     
-    PARAMETERS:
-    - total_processed: Total images in current batch
-    - new_verified: Count of new verified usernames added
-    - new_review: Count of new review-needed usernames added
-    - skipped: Count of duplicates skipped
-    - elapsed_time: Time taken in seconds
-    - num_workers: Number of parallel workers used
-    
-    PURPOSE FOR AI AGENTS:
-    Provides audit trail of each extraction run. Users can track what was
-    added in each batch and cumulative progress.
-    """
-    images_per_second = total_processed / elapsed_time if elapsed_time > 0 else 0
-    speedup = num_workers * 0.7  # Approximate speedup (not perfectly linear)
-    
-    report_content = [
-        "# Extraction Report - Current Run",
-        "",
-        f"**Generated:** {datetime.now().strftime('%B %d, %Y at %I:%M %p')}",
-        "",
-        "## Current Run Summary",
-        "",
-        f"- **Images Processed:** {total_processed}",
-        f"- **New Verified Added:** {new_verified}",
-        f"- **New Review Added:** {new_review}",
-        f"- **Duplicates Skipped:** {skipped}",
-        "",
-        "## Performance",
-        "",
-        f"- **Processing Time:** {elapsed_time/60:.1f} minutes ({elapsed_time:.1f} seconds)",
-        f"- **Speed:** {images_per_second:.2f} images/second",
-        f"- **Average per Image:** {elapsed_time/total_processed:.2f} seconds",
-        f"- **Parallel Workers:** {num_workers} CPU cores",
-        f"- **Estimated Speedup:** ~{speedup:.1f}x faster than single-core",
-        "",
-        "## Files",
-        "",
-        "1. ✅ `verified_usernames.md` - All verified usernames (cumulative)",
-        "2. ⚠️ `needs_review.md` - All usernames needing review (cumulative)",
-        ""
-    ]
+    report = f"""# Instagram Username Extraction Report
+
+**Generated:** {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+
+---
+
+## Hardware Configuration
+
+- **Device:** {hardware_info['device_name']}
+- **GPU Available:** {'Yes' if hardware_info['gpu_available'] else 'No'}
+- **GPU Type:** {hardware_info['gpu_type'] or 'N/A'}
+- **Architecture:** {hardware_info['architecture']}
+- **Platform:** {hardware_info['platform']}
+- **CPU Cores:** {hardware_info['cpu_cores']}
+- **Worker Processes:** {hardware_info['optimal_workers']}
+
+---
+
+## Input
+
+- **Directory:** `{input_dir}`
+- **Total Images:** {total}
+
+---
+
+## Results Summary
+
+- ✅ **Verified:** {verified} ({verified/max(1,total)*100:.1f}%)
+- ⚠️ **Needs Review:** {review} ({review/max(1,total)*100:.1f}%)
+- ❌ **Failed:** {failed} ({failed/max(1,total)*100:.1f}%)
+- ⏭️ **Duplicates:** {duplicates} ({duplicates/max(1,total)*100:.1f}%)
+
+---
+
+## New Entries Added
+
+- **Verified List:** {new_verified} new usernames
+- **Review List:** {new_review} new usernames
+
+---
+
+## Performance Metrics
+
+- **Total Time:** {elapsed_time:.2f} seconds
+- **Average Time per Image:** {elapsed_time/max(1,total):.2f} seconds
+- **Processing Speed:** {images_per_second:.2f} images/second
+- **Average Confidence:** {avg_confidence:.1f}%
+
+---
+
+## Output Files
+
+- ✅ **Verified Usernames:** `{VERIFIED_FILE}`
+- ⚠️ **Needs Review:** `{REVIEW_FILE}`
+- 📊 **This Report:** `{REPORT_FILE}`
+
+---
+
+**Next Steps:**
+1. Review usernames in `needs_review.md`
+2. Verify low-confidence results manually
+3. Use verified list for your workflow
+"""
     
     with open(REPORT_FILE, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(report_content))
+        f.write(report)
 
-
-# ============================================================================
-# CLEANUP
-# ============================================================================
-
-def cleanup_debug_folder():
-    """
-    Delete temporary debug folder after processing.
-    
-    The debug folder contains preprocessed images from first 5 extractions.
-    These are useful for troubleshooting but not needed after successful run.
-    
-    PURPOSE FOR AI AGENTS:
-    Automatic cleanup prevents accumulation of temporary files. Debug images
-    are only retained if user needs to troubleshoot issues.
-    """
-    try:
-        if DEBUG_DIR.exists():
-            shutil.rmtree(DEBUG_DIR)
-            print(f"🗑️  Cleaned up debug folder")
-    except Exception as e:
-        print(f"⚠️  Could not delete debug folder: {e}")
-
-
-# ============================================================================
-# MAIN EXECUTION - PARALLEL VERSION
-# ============================================================================
 
 def main():
-    """
-    Main execution function - orchestrates entire extraction workflow with parallel processing.
+    print("\n" + "="*70)
+    print("Instagram Username Extractor - Universal GPU/CPU Acceleration")
+    print("="*70 + "\n")
     
-    WORKFLOW:
-    1. Parse command-line arguments for input directory
-    2. Determine optimal number of parallel workers (CPU cores)
-    3. Load existing usernames (duplicate detection)
-    4. Find all images in input directory
-    5. Confirm processing if large batch (>50 images)
-    6. Process images in parallel using multiprocessing.Pool
-    7. Display real-time progress
-    8. Collect and consolidate results
-    9. Append new results to output files
-    10. Generate performance report
-    11. Cleanup debug files
-    12. Display summary with speedup statistics
+    input_dir = parse_arguments()
     
-    PURPOSE FOR AI AGENTS:
-    This is the entry point. It coordinates all modules with parallel processing
-    for maximum performance, providing real-time feedback throughout extraction.
-    """
-    print("=" * 70)
-    print("INSTAGRAM USERNAME EXTRACTOR - PARALLEL PROCESSING VERSION")
-    print("=" * 70)
-    print()
-    
-    # Parse command-line arguments to get input directory
-    INPUT_DIR = parse_arguments()
-    
-    # Determine optimal number of workers
-    # Use all cores except 1 (to keep system responsive), max 8 for efficiency
-    available_cores = cpu_count()
-    num_workers = min(max(1, available_cores - 1), 8)
-    
-    print(f"🚀 Parallel Processing: Using {num_workers} CPU cores (of {available_cores} available)")
-    print(f"   Expected speedup: ~{num_workers * 0.7:.1f}x faster than single-core")
-    print()
-    
-    # Load existing usernames for duplicate detection
-    print("📂 Loading existing usernames...")
-    existing_usernames = load_existing_usernames()
-    print(f"   Found {len(existing_usernames)} existing usernames")
-    print()
-    
-    # Verify input directory exists
-    if not INPUT_DIR.exists():
-        print(f"❌ Directory not found: {INPUT_DIR}")
-        print(f"   Please create the folder or specify a different path.")
+    if not input_dir.exists():
+        print(f"❌ Error: Directory not found: {input_dir}")
+        print(f"\n💡 Tip: Place images in ~/Desktop/leads_images or specify custom path")
         return
     
-    # Find all image files in directory
-    image_extensions = ('.png', '.jpg', '.jpeg', '.webp')
-    image_files = sorted([f for f in INPUT_DIR.iterdir() 
-                          if f.is_file() and f.suffix.lower() in image_extensions])
+    print("🔍 Detecting hardware...\n")
+    hardware_info = detect_hardware()
     
-    # Check if any images were found
-    if not image_files:
-        print(f"❌ No images found in {INPUT_DIR}")
+    print(f"   Device: {hardware_info['device_name']}")
+    print(f"   GPU: {'✅ ' + hardware_info['gpu_type'] if hardware_info['gpu_available'] else '❌ Not available'}")
+    print(f"   Workers: {hardware_info['optimal_workers']} parallel processes")
+    print()
+    
+    print(f"📁 Scanning directory: {input_dir}\n")
+    image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
+    image_paths = [p for p in input_dir.iterdir() 
+                  if p.suffix.lower() in image_extensions]
+    
+    if not image_paths:
+        print(f"❌ No images found in {input_dir}")
         print(f"   Supported formats: {', '.join(image_extensions)}")
         return
     
-    total = len(image_files)
-    print(f"Found {total} images in {INPUT_DIR}")
-    print()
+    print(f"   Found {len(image_paths)} images\n")
     
-    # Estimate processing time with parallel speedup
-    if total > 50:
-        # Original estimate: 2 seconds per image
-        # With parallel: divide by number of workers (with efficiency factor)
-        est_minutes = (total * 2) / (num_workers * 0.7) / 60
-        est_minutes_single = total * 2 / 60
-        print(f"⚠️  Estimated time: ~{est_minutes:.1f} minutes (vs ~{est_minutes_single:.0f} min single-core)")
-        response = input("Continue? (y/n): ")
-        if response.lower() != 'y':
-            print("Cancelled.")
-            return
-        print()
+    print("🔄 Loading existing usernames...")
+    existing_usernames = load_existing_usernames()
+    print(f"   Loaded {len(existing_usernames)} existing usernames\n")
     
-    # Start timer
-    start = time.time()
-    
-    print("=" * 70)
-    print("PROCESSING IMAGES IN PARALLEL...")
-    print("=" * 70)
-    print()
-    
-    # Prepare arguments for parallel processing
-    # Each worker gets: (image_path, index, total, existing_usernames)
-    process_args = [
-        (img_path, i, total, existing_usernames)
-        for i, img_path in enumerate(image_files, 1)
+    use_gpu = hardware_info['gpu_available']
+    args_list = [
+        (path, idx, len(image_paths), existing_usernames, use_gpu)
+        for idx, path in enumerate(image_paths, 1)
     ]
     
-    # Process images in parallel
-    with Pool(processes=num_workers) as pool:
-        results = pool.map(extract_username_from_image_parallel, process_args)
+    print(f"🚀 Processing {len(image_paths)} images...\n")
+    start_time = time.time()
     
-    # Calculate elapsed time
-    elapsed = time.time() - start
+    with Pool(processes=hardware_info['optimal_workers']) as pool:
+        results = pool.map(extract_username_from_image_parallel, args_list)
     
-    print()
-    print("=" * 70)
-    print("SAVING RESULTS...")
-    print("=" * 70)
-    print()
+    elapsed_time = time.time() - start_time
     
-    # Count duplicates
-    skipped_duplicates = sum(1 for r in results if r.get('is_duplicate', False))
+    print(f"\n💾 Saving results...")
+    new_verified, new_review = append_to_files(results, existing_usernames)
     
-    # Filter out duplicates for saving
-    new_results = [r for r in results if not r.get('is_duplicate', False)]
+    generate_report(hardware_info, input_dir, results, elapsed_time, new_verified, new_review)
     
-    # Save results to files
-    new_verified, new_review = append_to_files(new_results, existing_usernames)
+    if DEBUG_DIR.exists():
+        shutil.rmtree(DEBUG_DIR)
     
-    # Generate report with performance stats
-    create_report(total, new_verified, new_review, skipped_duplicates, elapsed, num_workers)
+    print(f"\n{'='*70}")
+    print("✅ EXTRACTION COMPLETE")
+    print(f"{'='*70}\n")
     
-    # Cleanup temporary files
-    cleanup_debug_folder()
+    print(f"📊 Results:")
+    print(f"   • New verified: {new_verified}")
+    print(f"   • New for review: {new_review}")
+    print(f"   • Processing time: {elapsed_time:.2f}s")
+    print(f"   • Speed: {len(image_paths)/elapsed_time:.2f} images/sec\n")
     
-    # Display summary
-    print()
-    print("✅ COMPLETE")
-    print()
-    print(f"⏱️  Time: {elapsed/60:.1f} minutes ({elapsed:.1f} seconds)")
-    print(f"⚡ Speed: {total/elapsed:.2f} images/second")
-    print(f"🚀 Parallel Speedup: ~{num_workers * 0.7:.1f}x faster")
-    print(f"📊 New entries: {new_verified + new_review}/{total}")
-    print(f"⏭️  Duplicates skipped: {skipped_duplicates}")
-    print()
-    print(f"📁 OUTPUT FOLDER: {OUTPUT_DIR}")
-    print()
-    print("=" * 70)
+    print(f"📁 Output files:")
+    print(f"   • {VERIFIED_FILE}")
+    print(f"   • {REVIEW_FILE}")
+    print(f"   • {REPORT_FILE}\n")
 
 
-# ============================================================================
-# SCRIPT ENTRY POINT
-# ============================================================================
-
-if __name__ == "__main__":
-    """
-    Script entry point - only runs when executed directly.
-    
-    This allows the script to be imported as a module without auto-execution,
-    while still functioning as a standalone command-line tool.
-    """
+if __name__ == '__main__':
     main()
