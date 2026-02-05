@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='torch.utils.data.dataloader')
+
 import os
 import re
 import time
