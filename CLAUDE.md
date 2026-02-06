@@ -35,13 +35,19 @@ Everything lives in `extract_usernames.py`. The processing pipeline:
 
 1. **Hardware detection** (`detect_hardware`) — probes CUDA, MPS (Apple Silicon), falls back to CPU. Determines worker count for multiprocessing.
 2. **Image cropping** — uses hardcoded pixel offsets (`TOP_OFFSET=165`, `CROP_HEIGHT=90`, margins of 100px) to extract the username region from Instagram profile screenshots.
-3. **Preprocessing** (`preprocess_image`) — grayscale → denoise → 3x upscale → adaptive threshold → morphological close. All via OpenCV.
-4. **OCR** (`ocr_extract_username`) — EasyOCR reader (singleton via `get_ocr_reader`), picks highest-confidence result.
+3. **Multi-pass preprocessing** — three variants run on each image:
+   - `preprocess_balanced` — CLAHE → bilateral filter → 3x LANCZOS4 upscale → median blur → adaptive threshold → morphological close
+   - `preprocess_aggressive` — CLAHE (high clip) → 4x LANCZOS4 upscale → Otsu threshold → morphological close (larger kernel)
+   - `preprocess_minimal` — grayscale → 3x LANCZOS4 upscale → denoise → mean-based adaptive threshold
+4. **Multi-pass OCR with voting** (`ocr_extract_username`) — EasyOCR reader (singleton via `get_ocr_reader`) runs on all 3 preprocessing variants. If 2+ passes agree on a username, that consensus result is used. Otherwise the highest-confidence single result wins.
 5. **Username validation** (`clean_username`) — enforces Instagram rules: 1-30 chars, alphanumeric/dots/underscores, must start alphanumeric, can't end with period.
-6. **Verification** (`check_instagram_exists`) — HTTP HEAD to `instagram.com/{username}/`, status 200 = exists.
-7. **Categorization** — verified (≥60% confidence + URL exists), unverified (≥60% + network error), review (low confidence or URL 404), failed (no extraction).
-8. **Parallel processing** — `multiprocessing.Pool` distributes images across workers. Note: the global `_ocr_reader` singleton does NOT carry across processes; each worker initializes its own reader.
-9. **Output** — appends to markdown files in `~/Desktop/leads/`: `verified_usernames.md`, `needs_review.md`, `extraction_report.md`. Tracks existing usernames to skip duplicates across runs.
+6. **Character confusion correction** (`generate_username_candidates`) — generates up to 10 variants of the OCR result by substituting commonly confused characters (l/1/i, o/0, rn/m, vv/w, cl/d, ii/u). Each candidate is checked against Instagram before falling back to the original.
+7. **Image quality scoring** (`calculate_image_quality`, `adjust_confidence`) — measures sharpness (Laplacian variance), contrast (std deviation), and brightness consistency. Adjusts OCR confidence up or down based on image quality.
+8. **Verification** (`check_instagram_exists`) — HTTP HEAD to `instagram.com/{username}/` with retry logic (3 attempts, exponential backoff on 429 rate limiting). Returns True/False/None.
+9. **Tiered categorization** — verified (≥70% adjusted confidence + URL exists), unverified (≥70% + network error), review (<70% or URL 404), failed (no extraction). Verified results are further tagged HIGH (≥85%) or MED (70-84%).
+10. **Near-duplicate detection** (`find_similar_existing`) — Levenshtein distance check against existing usernames. Near-duplicates (edit distance ≤2) are flagged for review rather than auto-verified.
+11. **Parallel processing** — `multiprocessing.Pool` distributes images across workers. Note: the global `_ocr_reader` singleton does NOT carry across processes; each worker initializes its own reader.
+12. **Output** — appends to markdown files in `~/Desktop/leads/`: `verified_usernames.md`, `needs_review.md`, `extraction_report.md`. Tracks existing usernames to skip duplicates and near-duplicates across runs.
 
 ## Key Constants
 
@@ -89,7 +95,7 @@ perf:     performance improvements
 
 3. **OCR reader singleton does NOT cross process boundaries** — `_ocr_reader` is a module-level global. Each `multiprocessing.Pool` worker initializes its own reader instance. Do not attempt to share the reader across processes or pass it as an argument.
 
-4. **Instagram verification is rate-limited** — `check_instagram_exists()` makes HTTP HEAD requests to instagram.com. High-volume runs may trigger rate limiting or IP blocks. The bare `except:` clause in that function intentionally catches all network errors and returns `None` (unverified) rather than crashing.
+4. **Instagram verification is rate-limited** — `check_instagram_exists()` makes HTTP HEAD requests to instagram.com with retry logic and exponential backoff. High-volume runs may still trigger rate limiting or IP blocks. The function catches `requests.RequestException` and returns `None` (unverified) after exhausting retries.
 
 5. **Output files are append-only** — `verified_usernames.md` and `needs_review.md` are designed for incremental appending across multiple runs. The duplicate detection in `load_existing_usernames()` relies on specific markdown formatting patterns (numbered lists with regex). Do not change the output format without updating the corresponding regex patterns.
 

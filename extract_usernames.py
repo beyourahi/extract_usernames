@@ -110,7 +110,7 @@ def load_existing_usernames():
     if VERIFIED_FILE.exists():
         with open(VERIFIED_FILE, 'r', encoding='utf-8') as f:
             for line in f:
-                match = re.match(r'^\d+\.\s+(\w+(?:[._]\w+)*)\s+-\s+https?://', line)
+                match = re.match(r'^\d+\.\s+(\w+(?:[._]\w+)*)\s+-\s+https?://.+?(?:\s+\[.+\])?$', line)
                 if match:
                     existing_usernames.add(match.group(1))
     
@@ -124,14 +124,41 @@ def load_existing_usernames():
     return existing_usernames
 
 
-def preprocess_image(img_cv):
+def preprocess_balanced(img_cv):
     gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
-    upscaled = cv2.resize(denoised, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-    thresh = cv2.adaptiveThreshold(upscaled, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 8)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+    bilateral = cv2.bilateralFilter(enhanced, 9, 75, 75)
+    upscaled = cv2.resize(bilateral, None, fx=3, fy=3, interpolation=cv2.INTER_LANCZOS4)
+    median = cv2.medianBlur(upscaled, 3)
+    thresh = cv2.adaptiveThreshold(median, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 8)
     kernel = np.ones((2, 2), np.uint8)
-    processed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-    return processed
+    return cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+
+
+def preprocess_aggressive(img_cv):
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+    upscaled = cv2.resize(enhanced, None, fx=4, fy=4, interpolation=cv2.INTER_LANCZOS4)
+    _, thresh = cv2.threshold(upscaled, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    kernel = np.ones((3, 3), np.uint8)
+    return cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+
+
+def preprocess_minimal(img_cv):
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    upscaled = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_LANCZOS4)
+    denoised = cv2.fastNlMeansDenoising(upscaled, None, 10, 7, 21)
+    thresh = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, 10)
+    return thresh
+
+
+PREPROCESS_VARIANTS = [
+    ('balanced', preprocess_balanced),
+    ('aggressive', preprocess_aggressive),
+    ('minimal', preprocess_minimal),
+]
 
 
 def initialize_ocr_reader(use_gpu=True):
@@ -154,25 +181,50 @@ def get_ocr_reader(use_gpu=True):
 
 
 def ocr_extract_username(img_cv, use_gpu=True):
-    try:
-        reader = get_ocr_reader(use_gpu)
-        processed = preprocess_image(img_cv)
-        results = reader.readtext(processed)
-        
-        best_username = None
-        best_confidence = 0
-        
-        for (bbox, text, confidence) in results:
-            username = clean_username(text)
-            if username and confidence > best_confidence:
-                best_username = username
-                best_confidence = confidence * 100
-        
-        return best_username, best_confidence
-        
-    except Exception as e:
-        print(f"   OCR Error: {e}")
+    reader = get_ocr_reader(use_gpu)
+    results_per_variant = []
+
+    for variant_name, preprocessor in PREPROCESS_VARIANTS:
+        try:
+            processed = preprocessor(img_cv)
+            ocr_results = reader.readtext(processed)
+
+            best_username = None
+            best_confidence = 0
+
+            for (bbox, text, confidence) in ocr_results:
+                username = clean_username(text)
+                if username and confidence > best_confidence:
+                    best_username = username
+                    best_confidence = confidence * 100
+
+            if best_username:
+                results_per_variant.append({
+                    'username': best_username,
+                    'confidence': best_confidence,
+                    'variant': variant_name,
+                })
+        except Exception:
+            continue
+
+    if not results_per_variant:
         return None, 0
+
+    votes = {}
+    for r in results_per_variant:
+        u = r['username']
+        if u not in votes:
+            votes[u] = {'count': 0, 'total_conf': 0, 'max_conf': 0}
+        votes[u]['count'] += 1
+        votes[u]['total_conf'] += r['confidence']
+        votes[u]['max_conf'] = max(votes[u]['max_conf'], r['confidence'])
+
+    for username, v in sorted(votes.items(), key=lambda x: x[1]['count'], reverse=True):
+        if v['count'] >= 2:
+            return username, v['total_conf'] / v['count']
+
+    best = max(results_per_variant, key=lambda x: x['confidence'])
+    return best['username'], best['confidence']
 
 
 def clean_username(text):
@@ -199,58 +251,185 @@ def clean_username(text):
     return text
 
 
-def check_instagram_exists(username):
-    try:
-        url = f"https://www.instagram.com/{username}/"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-        }
-        response = requests.head(url, headers=headers, timeout=5, allow_redirects=True)
-        return response.status_code == 200
-    except:
+CHAR_CONFUSION = {
+    'l': ['1', 'i'],
+    '1': ['l', 'i'],
+    'i': ['l', '1'],
+    'o': ['0'],
+    '0': ['o'],
+}
+
+MULTI_CHAR_CONFUSION = [
+    ('rn', 'm'),
+    ('m', 'rn'),
+    ('vv', 'w'),
+    ('w', 'vv'),
+    ('cl', 'd'),
+    ('ii', 'u'),
+]
+
+
+def generate_username_candidates(username):
+    if not username:
+        return []
+
+    candidates = [username]
+
+    for i, char in enumerate(username):
+        if char in CHAR_CONFUSION:
+            for replacement in CHAR_CONFUSION[char]:
+                candidate = username[:i] + replacement + username[i+1:]
+                cleaned = clean_username(candidate)
+                if cleaned and cleaned not in candidates:
+                    candidates.append(cleaned)
+
+    for wrong, right in MULTI_CHAR_CONFUSION:
+        if wrong in username:
+            candidate = username.replace(wrong, right, 1)
+            cleaned = clean_username(candidate)
+            if cleaned and cleaned not in candidates:
+                candidates.append(cleaned)
+
+    return candidates[:10]
+
+
+def levenshtein_distance(s1, s2):
+    if len(s1) < len(s2):
+        return levenshtein_distance(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+
+    previous_row = range(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+
+    return previous_row[-1]
+
+
+def find_similar_existing(username, existing_usernames, max_distance=2):
+    if not username or not existing_usernames:
         return None
+
+    best_match = None
+    best_dist = max_distance + 1
+
+    for existing in existing_usernames:
+        if abs(len(existing) - len(username)) > max_distance:
+            continue
+        dist = levenshtein_distance(username, existing)
+        if 0 < dist < best_dist:
+            best_match = existing
+            best_dist = dist
+
+    if best_match:
+        return best_match, best_dist
+    return None
+
+
+def calculate_image_quality(img_cv):
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    sharpness = min(laplacian_var / 500, 1.0)
+    contrast = min(gray.std() / 60, 1.0)
+    mean_brightness = gray.mean()
+    brightness = 1.0 - abs(mean_brightness - 128) / 128
+    return sharpness * 0.4 + contrast * 0.4 + brightness * 0.2
+
+
+def adjust_confidence(confidence, quality_score):
+    if quality_score > 0.7:
+        adjusted = confidence * (1 + (quality_score - 0.7) * 0.3)
+    elif quality_score < 0.5:
+        adjusted = confidence * (0.7 + quality_score * 0.6)
+    else:
+        adjusted = confidence
+    return min(adjusted, 100)
+
+
+def check_instagram_exists(username, max_retries=3):
+    url = f"https://www.instagram.com/{username}/"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+    }
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.head(url, headers=headers, timeout=5, allow_redirects=True)
+            if response.status_code == 200:
+                return True
+            elif response.status_code == 429:
+                time.sleep(2 ** attempt)
+                continue
+            else:
+                return False
+        except requests.RequestException:
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                continue
+            return None
+
+    return None
 
 
 def extract_username_from_image_parallel(args):
     image_path, image_index, total_images, existing_usernames, use_gpu = args
-    
+
     result = extract_username_from_image(image_path, use_gpu, save_debug=(image_index <= 5))
     result['filename'] = image_path.name
     result['index'] = image_index
-    
-    if result['username'] and result['username'] in existing_usernames:
-        result['is_duplicate'] = True
-    else:
-        result['is_duplicate'] = False
-    
+    result['is_duplicate'] = False
+    result['is_near_duplicate'] = False
+    result['similar_to'] = None
+
+    if result['username']:
+        if result['username'] in existing_usernames:
+            result['is_duplicate'] = True
+        else:
+            similar = find_similar_existing(result['username'], existing_usernames)
+            if similar:
+                result['is_near_duplicate'] = True
+                result['similar_to'] = similar[0]
+                result['edit_distance'] = similar[1]
+
     if result['is_duplicate']:
         status_icon = "⏭️"
         username_display = result['username']
         detail_text = " (duplicate)"
-        
+
+    elif result['is_near_duplicate']:
+        status_icon = "🔍"
+        username_display = result['username']
+        detail_text = f" (near-duplicate of {result['similar_to']})"
+
     elif not result['username']:
         status_icon = "❌"
         username_display = "Failed"
         detail_text = ""
-        
+
     else:
         username_display = result['username']
-        
+
         if result['status'] == 'verified':
             status_icon = "✅"
             detail_text = f" ({result['confidence']:.0f}% | URL: ✅)"
-            
+
         elif result['status'] == 'unverified':
             status_icon = "⚠️"
             detail_text = f" ({result['confidence']:.0f}% | URL: ⚠️ network error)"
-            
+
         else:
             status_icon = "⚠️"
-            url_icon = "✅" if result['verified'] == True else "❌" if result['verified'] == False else "⚠️"
+            url_icon = "✅" if result['verified'] is True else "❌" if result['verified'] is False else "⚠️"
             detail_text = f" ({result['confidence']:.0f}% | URL: {url_icon})"
-    
-    print(f"[{image_index}/{total_images}] {image_path.name} → {status_icon} {username_display}{detail_text}")
-    
+
+    print(f"[{image_index}/{total_images}] {image_path.name} -> {status_icon} {username_display}{detail_text}")
+
     return result
 
 
@@ -258,64 +437,89 @@ def extract_username_from_image(image_path, use_gpu=True, save_debug=False):
     try:
         img_cv = cv2.imread(str(image_path))
         height, width = img_cv.shape[:2]
-        
+
         left = LEFT_MARGIN
         top = TOP_OFFSET
         right = width - RIGHT_MARGIN
         bottom = top + CROP_HEIGHT
-        
+
         cropped = img_cv[top:bottom, left:right]
-        
+
         if save_debug:
             debug_path = DEBUG_DIR / f"{image_path.stem}_crop.png"
-            preprocessed = preprocess_image(cropped)
+            preprocessed = preprocess_balanced(cropped)
             cv2.imwrite(str(debug_path), preprocessed)
-        
+
         username, confidence = ocr_extract_username(cropped, use_gpu)
-        
+
         if not username:
             return {
                 'username': None,
                 'confidence': 0,
                 'verified': False,
-                'status': 'failed'
+                'status': 'failed',
+                'quality': 0,
             }
-        
-        url_verified = check_instagram_exists(username)
-        
-        if confidence >= 60 and url_verified == True:
+
+        quality = calculate_image_quality(cropped)
+        confidence = adjust_confidence(confidence, quality)
+
+        candidates = generate_username_candidates(username)
+        best_username = username
+        url_verified = None
+
+        for candidate in candidates:
+            result = check_instagram_exists(candidate)
+            if result is True:
+                best_username = candidate
+                url_verified = True
+                break
+            elif result is False and url_verified is None:
+                url_verified = False
+            elif result is None and url_verified is None:
+                url_verified = None
+
+        username = best_username
+
+        if confidence >= 85 and url_verified is True:
             status = 'verified'
-        elif confidence >= 60 and url_verified == None:
+        elif confidence >= 70 and url_verified is True:
+            status = 'verified'
+        elif confidence >= 70 and url_verified is None:
             status = 'unverified'
         else:
             status = 'review'
-        
+
         return {
             'username': username,
             'confidence': confidence,
             'verified': url_verified,
-            'status': status
+            'status': status,
+            'quality': quality,
         }
-        
+
     except Exception as e:
         return {
             'username': None,
             'confidence': 0,
             'verified': False,
             'status': 'error',
-            'error': str(e)
+            'error': str(e),
+            'quality': 0,
         }
 
 
 def append_to_files(new_results, existing_usernames):
-    new_verified = [r for r in new_results 
-                   if r['status'] == 'verified' 
-                   and not r.get('is_duplicate', False)]
-    
-    new_review = [r for r in new_results 
-                 if r['status'] in ['review', 'unverified', 'error'] 
-                 and not r.get('is_duplicate', False)]
-    
+    new_verified = [r for r in new_results
+                    if r['status'] == 'verified'
+                    and not r.get('is_duplicate', False)
+                    and not r.get('is_near_duplicate', False)]
+
+    new_review = [r for r in new_results
+                  if (r['status'] in ['review', 'unverified', 'error']
+                      or r.get('is_near_duplicate', False))
+                  and not r.get('is_duplicate', False)]
+
     if new_verified:
         current_count = 0
         if VERIFIED_FILE.exists():
@@ -323,19 +527,21 @@ def append_to_files(new_results, existing_usernames):
                 for line in f:
                     if re.match(r'^\d+\.', line):
                         current_count += 1
-        
+
         with open(VERIFIED_FILE, 'a', encoding='utf-8') as f:
             if not VERIFIED_FILE.exists() or VERIFIED_FILE.stat().st_size == 0:
                 f.write("# Verified Instagram Usernames\n\n")
                 f.write(f"**Last Updated:** {datetime.now().strftime('%B %d, %Y at %I:%M %p')}\n\n")
                 f.write("---\n\n")
-            
+
             for i, item in enumerate(new_verified, current_count + 1):
                 url = f"https://www.instagram.com/{item['username']}"
-                f.write(f"{i}. {item['username']} - {url}\n")
-        
+                conf = item['confidence']
+                tier = "HIGH" if conf >= 85 else "MED"
+                f.write(f"{i}. {item['username']} - {url} [{tier} {conf:.0f}%]\n")
+
         update_file_header(VERIFIED_FILE, current_count + len(new_verified))
-    
+
     if new_review:
         current_count = 0
         if REVIEW_FILE.exists():
@@ -343,26 +549,30 @@ def append_to_files(new_results, existing_usernames):
                 for line in f:
                     if re.match(r'^\d+\.\s+\*\*', line):
                         current_count += 1
-        
+
         with open(REVIEW_FILE, 'a', encoding='utf-8') as f:
             if not REVIEW_FILE.exists() or REVIEW_FILE.stat().st_size == 0:
                 f.write("# Usernames Needing Manual Review\n\n")
                 f.write(f"**Last Updated:** {datetime.now().strftime('%B %d, %Y at %I:%M %p')}\n\n")
                 f.write("---\n\n")
-            
+
             for i, item in enumerate(new_review, current_count + 1):
                 username = item['username'] or 'FAILED'
                 url = f"https://www.instagram.com/{username}" if item['username'] else "N/A"
                 confidence = item['confidence']
-                verified = "✅" if item['verified'] == True else "❌" if item['verified'] == False else "⚠️"
+                verified = "✅" if item.get('verified') is True else "❌" if item.get('verified') is False else "⚠️"
                 filename = item.get('filename', 'Unknown')
-                
+                quality = item.get('quality', 0)
+
                 f.write(f"{i}. **{username}** - {url}\n")
                 f.write(f"   - **Image:** `{filename}`\n")
-                f.write(f"   - Confidence: {confidence:.0f}% | URL: {verified}\n\n")
-        
+                f.write(f"   - Confidence: {confidence:.0f}% | URL: {verified} | Quality: {quality:.2f}\n")
+                if item.get('is_near_duplicate'):
+                    f.write(f"   - **Near-duplicate of:** {item.get('similar_to', '?')} (edit distance: {item.get('edit_distance', '?')})\n")
+                f.write("\n")
+
         update_file_header(REVIEW_FILE, current_count + len(new_review))
-    
+
     return len(new_verified), len(new_review)
 
 
@@ -396,14 +606,21 @@ def update_file_header(file_path, new_total):
 
 def generate_report(hardware_info, input_dir, results, elapsed_time, new_verified, new_review):
     total = len(results)
-    verified = sum(1 for r in results if r['status'] == 'verified')
-    review = sum(1 for r in results if r['status'] in ['review', 'unverified'])
+    verified = sum(1 for r in results if r['status'] == 'verified'
+                   and not r.get('is_duplicate') and not r.get('is_near_duplicate'))
+    review = sum(1 for r in results if r['status'] in ['review', 'unverified']
+                 or r.get('is_near_duplicate', False))
     failed = sum(1 for r in results if r['status'] in ['failed', 'error'])
     duplicates = sum(1 for r in results if r.get('is_duplicate', False))
-    
-    avg_confidence = sum(r['confidence'] for r in results if r['username']) / max(1, total - failed)
+    near_dupes = sum(1 for r in results if r.get('is_near_duplicate', False))
+    high_conf = sum(1 for r in results if r['status'] == 'verified' and r['confidence'] >= 85)
+    med_conf = sum(1 for r in results if r['status'] == 'verified' and 70 <= r['confidence'] < 85)
+
+    extracted = [r for r in results if r['username']]
+    avg_confidence = sum(r['confidence'] for r in extracted) / max(1, len(extracted))
+    avg_quality = sum(r.get('quality', 0) for r in extracted) / max(1, len(extracted))
     images_per_second = total / elapsed_time if elapsed_time > 0 else 0
-    
+
     report = f"""# Instagram Username Extraction Report
 
 **Generated:** {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
@@ -432,9 +649,12 @@ def generate_report(hardware_info, input_dir, results, elapsed_time, new_verifie
 ## Results Summary
 
 - ✅ **Verified:** {verified} ({verified/max(1,total)*100:.1f}%)
+  - HIGH confidence (>=85%): {high_conf}
+  - MED confidence (70-84%): {med_conf}
 - ⚠️ **Needs Review:** {review} ({review/max(1,total)*100:.1f}%)
 - ❌ **Failed:** {failed} ({failed/max(1,total)*100:.1f}%)
 - ⏭️ **Duplicates:** {duplicates} ({duplicates/max(1,total)*100:.1f}%)
+- 🔍 **Near-Duplicates:** {near_dupes} ({near_dupes/max(1,total)*100:.1f}%)
 
 ---
 
@@ -451,6 +671,17 @@ def generate_report(hardware_info, input_dir, results, elapsed_time, new_verifie
 - **Average Time per Image:** {elapsed_time/max(1,total):.2f} seconds
 - **Processing Speed:** {images_per_second:.2f} images/second
 - **Average Confidence:** {avg_confidence:.1f}%
+- **Average Image Quality:** {avg_quality:.2f}
+
+---
+
+## Pipeline Configuration
+
+- **OCR Engine:** EasyOCR (multi-pass, 3 preprocessing variants)
+- **Preprocessing:** Balanced + Aggressive + Minimal (voting)
+- **Confidence Tiers:** HIGH >=85% | MED >=70% | REVIEW <70%
+- **Character Correction:** Enabled (confusion map + candidates)
+- **Near-Duplicate Detection:** Enabled (Levenshtein distance <=2)
 
 ---
 
@@ -463,11 +694,11 @@ def generate_report(hardware_info, input_dir, results, elapsed_time, new_verifie
 ---
 
 **Next Steps:**
-1. Review usernames in `needs_review.md`
+1. Review usernames in `needs_review.md` (especially near-duplicates)
 2. Verify low-confidence results manually
 3. Use verified list for your workflow
 """
-    
+
     with open(REPORT_FILE, 'w', encoding='utf-8') as f:
         f.write(report)
 
