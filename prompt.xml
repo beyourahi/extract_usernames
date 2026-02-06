@@ -1,0 +1,473 @@
+
+<?xml version="1.0" encoding="UTF-8"?>
+<task_specification>
+  <context>
+    <repository>
+      <name>extract_usernames</name>
+      <url>https://github.com/beyourahi/extract_usernames</url>
+      <type>single-file Python CLI tool</type>
+      <architecture>standalone script with no framework dependencies</architecture>
+      <purpose>Extract Instagram usernames from screenshots using multi-pass OCR with optional VLM consensus</purpose>
+    </repository>
+    
+    <current_vlm_model>
+      <name>qwen2.5vl:3b</name>
+      <size>3.2GB</size>
+      <deployment>Ollama server (local)</deployment>
+      <role>secondary verification and rescue mechanism for failed EasyOCR extractions</role>
+    </current_vlm_model>
+    
+    <execution_environment>
+      <location>local repository</location>
+      <mode>direct execution (not automated workflow)</mode>
+    </execution_environment>
+  </context>
+
+  <objectives>
+    <primary_goals>
+      <goal id="1">Research and evaluate superior open-source VLM alternatives to qwen2.5vl:3b for text extraction from screenshots</goal>
+      <goal id="2">Provide comprehensive justification for the current qwen2.5vl:3b model selection</goal>
+      <goal id="3">Create professional README.md with clear installation and usage instructions suitable for non-technical users</goal>
+      <goal id="4">Establish cross-platform usability (Windows, macOS, Linux) with minimal technical barriers</goal>
+      <goal id="5">Commit and push all changes with appropriate semantic commit messages</goal>
+    </primary_goals>
+  </objectives>
+
+  <research_requirements>
+    <vlm_alternatives>
+      <evaluation_criteria>
+        <criterion weight="high">OCR accuracy specifically for username extraction (alphanumeric + dots/underscores)</criterion>
+        <criterion weight="high">Model size and memory footprint (balance between performance and accessibility)</criterion>
+        <criterion weight="high">Preservation of special characters (dots, underscores) that EasyOCR tends to drop</criterion>
+        <criterion weight="medium">Inference latency for single-image processing</criterion>
+        <criterion weight="medium">Compatibility with Ollama or similar local inference engines</criterion>
+        <criterion weight="medium">Open-source licensing (Apache 2.0, MIT, or similar)</criterion>
+        <criterion weight="low">Community adoption and maintenance status</criterion>
+      </evaluation_criteria>
+
+      <candidate_models_discovered>
+        <!-- Based on research, these alternatives warrant detailed analysis -->
+        <model>
+          <name>olmOCR-2-7B-1025</name>
+          <size>~7GB (Q8 quant: 8.85GB)</size>
+          <base>Qwen2.5-VL-7B fine-tuned specifically for OCR</base>
+          <performance>82.4 points on olmOCR-Bench (+4 over olmOCR v1)</performance>
+          <strengths>Purpose-built for document OCR, handles handwritten/typewritten text, strong on complex layouts</strengths>
+          <considerations>2.3x larger than qwen2.5vl:3b, may require more VRAM, overkill for clean mobile screenshots</considerations>
+          <ollama_availability>Available via community models</ollama_availability>
+        </model>
+
+        <model>
+          <name>PaddleOCR-VL-1.5</name>
+          <size>0.9GB (0.9B parameters)</size>
+          <base>NaViT dynamic resolution encoder + ERNIE-4.5-0.3B</base>
+          <performance>94.5% accuracy on OmniDocBench v1.5 (SOTA), 92.05% on Real5-OmniDocBench</performance>
+          <strengths>Extremely lightweight, multilingual (109 languages), handles tables/formulas/charts, robust to skew/warp/lighting issues, supports 6 core tasks including text spotting</strengths>
+          <considerations>Designed for full document parsing (may be overkill), requires PaddlePaddle framework or transformers, Ollama support uncertain</considerations>
+          <ollama_availability>Not directly available (requires custom integration)</ollama_availability>
+        </model>
+
+        <model>
+          <name>MiniCPM-V 2.6/2.8</name>
+          <size>~5.5GB (8.1B params, compressible to ~5GB with INT4 quant)</size>
+          <base>SigLIP encoder + MiniCPM language model</base>
+          <performance>Top-tier on OCRBench, handles 1.8MP images, 32K context window, low hallucination</performance>
+          <strengths>Excellent OCR with arbitrary aspect ratios, edge-optimized (runs on phones), strong multilingual (30+ languages), adaptive visual encoding</strengths>
+          <considerations>1.7x larger than qwen2.5vl:3b, optimized for edge deployment (may be underutilized on desktop), multi-image/video focus</considerations>
+          <ollama_availability>Available via Ollama</ollama_availability>
+        </model>
+
+        <model>
+          <name>Qwen2.5-VL-7B-Instruct</name>
+          <size>~6GB</size>
+          <base>Larger sibling of current qwen2.5vl:3b</base>
+          <performance>~75% accuracy on complex OCR benchmarks (matches GPT-4o), 125K context window</performance>
+          <strengths>Direct upgrade path, same architecture, better at complex scenarios, proven Ollama integration</strengths>
+          <considerations>1.9x larger, slower inference, diminishing returns for simple username extraction vs 3B model</considerations>
+          <ollama_availability>Fully supported by Ollama</ollama_availability>
+        </model>
+
+        <model>
+          <name>Qwen2.5-Omni (7B)</name>
+          <size>~7GB</size>
+          <base>Multimodal thinker-talker architecture</base>
+          <performance>Exceptional across vision benchmarks despite 7B params</performance>
+          <strengths>Next-gen architecture, multimodal (image/video/audio), state-of-art at compact size</strengths>
+          <considerations>Newer model with less battle-testing, multimodal features unused for static screenshots, Ollama integration maturity uncertain</considerations>
+          <ollama_availability>Available but relatively new</ollama_availability>
+        </model>
+      </candidate_models_discovered>
+
+      <recommendation_framework>
+        <when_to_upgrade>
+          <scenario>If username extraction failure rate exceeds 15% on clean screenshots</scenario>
+          <scenario>If EasyOCR+VLM consensus produces frequent false positives (dots/underscores misread)</scenario>
+          <scenario>If user base has sufficient hardware (16GB+ RAM, GPU with 8GB+ VRAM)</scenario>
+          <scenario>If processing images with challenging conditions (skew, poor lighting, low resolution)</scenario>
+        </when_to_upgrade>
+
+        <when_current_is_sufficient>
+          <scenario>Clean mobile screenshots with standard Instagram layout</scenario>
+          <scenario>Hardware-constrained environments (8GB RAM, integrated graphics)</scenario>
+          <scenario>Processing speed is critical (real-time or near-real-time)</scenario>
+          <scenario>Current accuracy meets business requirements (>85% verified rate)</scenario>
+        </when_current_is_sufficient>
+      </recommendation_framework>
+
+      <rationale_for_qwen2_5vl_3b>
+        <reasons>
+          <reason priority="1">
+            <title>Optimal size-performance tradeoff</title>
+            <explanation>At 3.2GB, runs comfortably on consumer hardware (8GB RAM systems) while delivering solid OCR accuracy for clean screenshots. Larger models (7B+) offer marginal gains at 2-3x memory cost.</explanation>
+          </reason>
+          <reason priority="2">
+            <title>Ollama ecosystem maturity</title>
+            <explanation>Qwen2.5-VL series has first-class Ollama support with stable quantization, reliable chat API, and extensive community testing. Alternative models may require custom integration or have immature tooling.</explanation>
+          </reason>
+          <reason priority="3">
+            <title>Complementary to EasyOCR weaknesses</title>
+            <explanation>VLM's holistic image reading preserves underscores/dots that EasyOCR splits. Consensus logic leverages this strength—not a standalone OCR engine but a validation layer. Specialized OCR models (PaddleOCR-VL, olmOCR) are overkill for this secondary role.</explanation>
+          </reason>
+          <reason priority="4">
+            <title>Multi-pass architecture reduces VLM dependency</title>
+            <explanation>Script already runs 3 preprocessing variants with weighted voting before VLM. VLM only activates on disagreement or failure. A larger/slower VLM would bottleneck the pipeline without proportional benefit.</explanation>
+          </reason>
+          <reason priority="5">
+            <title>Cross-platform compatibility</title>
+            <explanation>Qwen2.5-VL-3B works seamlessly on CUDA (NVIDIA), ROCm (AMD), MPS (Apple Silicon), and CPU. Ensures consistent behavior across user hardware configurations.</explanation>
+          </reason>
+          <reason priority="6">
+            <title>Graceful degradation</title>
+            <explanation>Script can run EasyOCR-only (--no-vlm flag) if VLM is unavailable. Lightweight 3B model makes VLM setup more accessible vs requiring 8GB+ VRAM for 7B+ models. Lowers barrier to entry.</explanation>
+          </reason>
+        </reasons>
+
+        <conclusion>
+          qwen2.5vl:3b was chosen for accessibility, not maximum performance. It's the smallest viable VLM that adds measurable value without excluding users on typical hardware. For specialized OCR pipelines processing degraded documents at scale, larger models (olmOCR-2, PaddleOCR-VL) justify their overhead. For this use case—secondary validation of clean mobile screenshots—3B is the sweet spot.
+        </conclusion>
+      </rationale_for_qwen2_5vl_3b>
+    </vlm_alternatives>
+  </research_requirements>
+
+  <readme_specifications>
+    <target_audience>
+      <persona>Non-technical users (marketers, social media managers, lead generators)</persona>
+      <persona>Developers unfamiliar with Python ML tooling</persona>
+      <persona>Users on Windows/macOS/Linux with varying hardware (integrated graphics to dedicated GPUs)</persona>
+    </target_audience>
+
+    <content_structure>
+      <section order="1">
+        <title>Overview</title>
+        <requirements>
+          <requirement>One-sentence description of what the tool does</requirement>
+          <requirement>Visual example or use case (optional but recommended)</requirement>
+          <requirement>Key features in 3-5 bullet points (focus on user benefits, not technical details)</requirement>
+        </requirements>
+      </section>
+
+      <section order="2">
+        <title>Features</title>
+        <requirements>
+          <requirement>Highlight GPU acceleration (automatic, no manual config)</requirement>
+          <requirement>Emphasize multi-pass OCR reliability</requirement>
+          <requirement>Mention VLM consensus (explain as "AI double-checking" in layman terms)</requirement>
+          <requirement>Note duplicate detection and deduplication across runs</requirement>
+          <requirement>Clarify output formats (Markdown files, browsable on GitHub/text editors)</requirement>
+        </requirements>
+      </section>
+
+      <section order="3">
+        <title>System Requirements</title>
+        <requirements>
+          <requirement>Minimum specs (CPU, RAM, disk space)</requirement>
+          <requirement>Recommended specs for best performance</requirement>
+          <requirement>OS compatibility matrix (Windows 10/11, macOS 11+, Ubuntu 20.04+)</requirement>
+          <requirement>Python version requirement (3.8+ recommended)</requirement>
+        </requirements>
+      </section>
+
+      <section order="4">
+        <title>Installation</title>
+        <requirements>
+          <requirement>Separate subsections for Windows, macOS, Linux</requirement>
+          <requirement>Step-by-step instructions with copy-paste commands</requirement>
+          <requirement>Include Python installation (link to python.org with version guidance)</requirement>
+          <requirement>Include pip dependency installation with single command</requirement>
+          <requirement>Include Ollama installation (optional but recommended section)</requirement>
+          <requirement>Include qwen2.5vl:3b model download command</requirement>
+          <requirement>Verification step (how to confirm installation worked)</requirement>
+        </requirements>
+      </section>
+
+      <section order="5">
+        <title>Quick Start</title>
+        <requirements>
+          <requirement>Simplest possible example (folder on Desktop)</requirement>
+          <requirement>Where to find output files</requirement>
+          <requirement>What to do with verified_usernames.md (copy to spreadsheet, CRM import, etc.)</requirement>
+          <requirement>What to do with needs_review.md (manual verification workflow)</requirement>
+        </requirements>
+      </section>
+
+      <section order="6">
+        <title>Usage</title>
+        <requirements>
+          <requirement>Command-line arguments with examples (not just --help dump)</requirement>
+          <requirement>Common scenarios: basic run, custom output, diagnostics, VLM disabled</requirement>
+          <requirement>Input image requirements (format, resolution, crop region expectations)</requirement>
+          <requirement>Output file descriptions with sample snippets</requirement>
+        </requirements>
+      </section>
+
+      <section order="7">
+        <title>How It Works</title>
+        <requirements>
+          <requirement>High-level pipeline diagram (text-based ASCII art or description)</requirement>
+          <requirement>Explain crop region and why screenshots need consistent layout</requirement>
+          <requirement>Explain confidence tiers (HIGH/MED/REVIEW) without overwhelming detail</requirement>
+          <requirement>Briefly mention VLM consensus logic (when it helps, why it's optional)</requirement>
+        </requirements>
+      </section>
+
+      <section order="8">
+        <title>Troubleshooting</title>
+        <requirements>
+          <requirement>Common errors: Python not found, pip install fails, Ollama not running</requirement>
+          <requirement>How to run without VLM (--no-vlm flag)</requirement>
+          <requirement>What to do if extraction fails on many images (crop region mismatch)</requirement>
+          <requirement>Performance tips: optimal worker count, GPU vs CPU mode, batch size considerations</requirement>
+        </requirements>
+      </section>
+
+      <section order="9">
+        <title>Advanced: VLM Model Alternatives</title>
+        <requirements>
+          <requirement>Brief mention that qwen2.5vl:3b is default but other models can be used</requirement>
+          <requirement>List 2-3 viable alternatives with trade-offs (e.g., olmOCR-2 for better accuracy but 2x memory, MiniCPM-V for edge deployment)</requirement>
+          <requirement>Instructions to change VLM_MODEL constant in script (line number reference)</requirement>
+          <requirement>Note: This is for power users; beginners should use default</requirement>
+        </requirements>
+      </section>
+
+      <section order="10">
+        <title>FAQ</title>
+        <requirements>
+          <requirement>Why do some usernames go to review? (confidence scoring explanation)</requirement>
+          <requirement>Can I process images from different Instagram layouts? (crop region constraints)</requirement>
+          <requirement>Does this work offline? (yes, after initial model downloads)</requirement>
+          <requirement>Is GPU required? (no, but much faster)</requirement>
+          <requirement>How accurate is it? (depends on image quality, typically >85% auto-verified)</requirement>
+        </requirements>
+      </section>
+
+      <section order="11">
+        <title>Contributing</title>
+        <requirements>
+          <requirement>Link to conventional commits guide</requirement>
+          <requirement>Request feature requests via GitHub issues</requirement>
+          <requirement>Note: Single-file architecture is intentional, PRs should respect this</requirement>
+        </requirements>
+      </section>
+
+      <section order="12">
+        <title>License</title>
+        <requirements>
+          <requirement>Specify license (if not already set, recommend MIT for accessibility)</requirement>
+        </requirements>
+      </section>
+    </content_structure>
+
+    <style_guidelines>
+      <guideline>Use clear, jargon-free language (replace "VLM" with "AI vision model" in user-facing sections)</guideline>
+      <guideline>Provide visual hierarchy with headers, bullet points, code blocks, and blockquotes (for important notes)</guideline>
+      <guideline>Include emoji sparingly for visual scanning (✅ for success, ⚠️ for warnings, 💡 for tips)</guideline>
+      <guideline>Keep paragraphs short (2-3 sentences max) for readability</guideline>
+      <guideline>Use collapsible sections (&lt;details&gt; tags) for platform-specific install instructions to reduce visual clutter</guideline>
+      <guideline>Test all commands on fresh environment before publishing (no "works on my machine" pitfalls)</guideline>
+    </style_guidelines>
+  </readme_specifications>
+
+  <cross_platform_usability>
+    <packaging_recommendations>
+      <option priority="high">
+        <method>requirements.txt with pinned versions</method>
+        <reasoning>Standard Python practice, works across all platforms, easy to update</reasoning>
+        <implementation>Generate from current environment: pip freeze > requirements.txt, then manually curate to remove unnecessary transitive deps</implementation>
+      </option>
+
+      <option priority="medium">
+        <method>Dockerfile for containerized deployment</method>
+        <reasoning>Eliminates "it works on my machine" issues, consistent environment, Docker available on Win/Mac/Linux</reasoning>
+        <implementation>Multi-stage build: slim Python base → install system deps (libGL for OpenCV) → pip install → copy script → entrypoint with volume mounts for image input/output</implementation>
+        <trade_offs>Requires Docker installation (adds complexity), GPU passthrough tricky on macOS</trade_offs>
+      </option>
+
+      <option priority="low">
+        <method>Standalone executable (PyInstaller/Nuitka)</method>
+        <reasoning>True zero-dependency distribution, double-click to run</reasoning>
+        <implementation>Bundle Python + deps + script into single .exe (Windows) or .app (macOS). Challenge: 500MB+ binary size due to PyTorch, EasyOCR models still download separately (cache location issues)</implementation>
+        <trade_offs>Large binaries, OS-specific builds, model caching edge cases, not recommended for this project</trade_offs>
+      </option>
+    </packaging_recommendations>
+
+    <installer_scripts>
+      <script platform="Windows">
+        <purpose>One-click setup: check Python, install deps, download Ollama, pull model</purpose>
+        <format>PowerShell script (setup.ps1) or batch file (setup.bat)</format>
+        <features>
+          <feature>Detect Python 3.8+ installation (check PATH, offer python.org link if missing)</feature>
+          <feature>Run pip install -r requirements.txt with --user flag for non-admin users</feature>
+          <feature>Check Ollama installation (download installer if missing: ollama.com/download)</feature>
+          <feature>Pull qwen2.5vl:3b model with ollama pull (show progress bar)</feature>
+          <feature>Create Desktop shortcut (optional)</feature>
+        </features>
+      </script>
+
+      <script platform="macOS">
+        <purpose>Homebrew-based setup + pip</purpose>
+        <format>Bash script (setup.sh)</format>
+        <features>
+          <feature>Check Homebrew installation (offer install command if missing)</feature>
+          <feature>brew install python@3.11 (explicit version for consistency)</feature>
+          <feature>pip3 install -r requirements.txt</feature>
+          <feature>brew install ollama</feature>
+          <feature>ollama pull qwen2.5vl:3b</feature>
+          <feature>Add alias to .zshrc for easy invocation (optional)</feature>
+        </features>
+      </script>
+
+      <script platform="Linux">
+        <purpose>apt/yum-based system dep install + pip</purpose>
+        <format>Bash script (setup.sh) with distro detection</format>
+        <features>
+          <feature>Detect distro (Ubuntu/Debian vs Fedora/RHEL vs Arch)</feature>
+          <feature>Install Python 3.8+, pip, python3-venv (system package manager)</feature>
+          <feature>Create virtual environment (recommended for Linux to avoid system Python conflicts)</feature>
+          <feature>pip install -r requirements.txt in venv</feature>
+          <feature>Install Ollama (curl -fsSL https://ollama.com/install.sh | sh)</feature>
+          <feature>ollama pull qwen2.5vl:3b</feature>
+        </features>
+      </script>
+
+      <validation>
+        Each installer script should end with validation step: run python3 extract_usernames.py --help and check for clean output (no import errors). If validation fails, print diagnostic info (Python version, pip list, Ollama status) and troubleshooting link.
+      </validation>
+    </installer_scripts>
+
+    <gui_wrapper_suggestion>
+      <priority>Optional (nice-to-have, not required)</priority>
+      <rationale>Non-technical users intimidated by command line, GUI provides drag-and-drop UX</rationale>
+      <implementation_options>
+        <option>
+          <technology>PyQt6 or Tkinter</technology>
+          <features>Folder picker, progress bar, open output folder button, settings panel (enable/disable VLM, diagnostics toggle)</features>
+          <effort>~4-8 hours for basic implementation</effort>
+          <distribution>Separate gui_launcher.py that wraps extract_usernames.py as subprocess</distribution>
+        </option>
+        <option>
+          <technology>Web-based (Flask/FastAPI + simple HTML frontend)</technology>
+          <features>Upload images via browser, real-time progress via WebSocket, download results as zip</features>
+          <effort>~8-12 hours</effort>
+          <distribution>Requires running local server (python app.py), may confuse non-technical users with localhost:5000 URLs</distribution>
+        </option>
+      </implementation_options>
+      <recommendation>If implementing GUI, prioritize native desktop (PyQt6) over web for simplicity. Keep as separate optional tool, maintain CLI as primary interface.</recommendation>
+    </gui_wrapper_suggestion>
+  </cross_platform_usability>
+
+  <commit_strategy>
+    <commits>
+      <commit order="1">
+        <message>docs: add comprehensive README with installation and usage instructions</message>
+        <files>
+          <file>README.md</file>
+        </files>
+        <notes>Include all sections from readme_specifications. Ensure cross-platform examples are tested.</notes>
+      </commit>
+
+      <commit order="2">
+        <message>chore: add requirements.txt for reproducible dependency installation</message>
+        <files>
+          <file>requirements.txt</file>
+        </files>
+        <notes>Pin major versions but allow minor/patch updates (e.g., opencv-python>=4.8,<5.0). Include: easyocr, torch, torchvision, opencv-python, numpy, ollama.</notes>
+      </commit>
+
+      <commit order="3">
+        <message>feat: add cross-platform setup scripts for automated installation</message>
+        <files>
+          <file>setup.ps1</file>
+          <file>setup.sh</file>
+        </files>
+        <notes>Windows PowerShell script and Unix bash script (works on macOS/Linux). Include validation steps. Mark as executable: chmod +x setup.sh</notes>
+      </commit>
+
+      <commit order="4" condition="if_applicable">
+        <message>docs: add VLM alternatives comparison and rationale in CLAUDE.md</message>
+        <files>
+          <file>CLAUDE.md</file>
+        </files>
+        <notes>Update project documentation with research findings. Append new section "## VLM Model Selection" with alternatives table and qwen2.5vl:3b justification. Maintain existing content, don't rewrite.</notes>
+      </commit>
+
+      <commit order="5" condition="optional">
+        <message>feat: add GUI wrapper for non-CLI users</message>
+        <files>
+          <file>gui_launcher.py</file>
+          <file>requirements-gui.txt</file>
+        </files>
+        <notes>Only if implementing GUI wrapper. Separate commit to keep feature isolated.</notes>
+      </commit>
+    </commits>
+
+    <push_strategy>
+      <approach>Push all commits in single push after local validation</approach>
+      <validation>
+        <step>Test README commands on fresh VM/container for each OS</step>
+        <step>Run setup scripts and verify successful installation</step>
+        <step>Test extract_usernames.py with sample images to confirm no regressions</step>
+        <step>Check git status for untracked files (e.g., __pycache__, test images)</step>
+        <step>Review git log --oneline to ensure commit messages follow conventional commits</step>
+      </validation>
+      <command>git push origin main</command>
+    </push_strategy>
+  </commit_strategy>
+
+  <quality_standards>
+    <documentation>
+      <standard>All commands must be tested on target platform before inclusion in README</standard>
+      <standard>No broken links (verify python.org, ollama.com, GitHub links)</standard>
+      <standard>Code blocks must specify language for syntax highlighting (```bash, ```python, ```powershell)</standard>
+      <standard>Provide context before commands (don't just list commands, explain what they do)</standard>
+    </documentation>
+
+    <code>
+      <standard>No changes to extract_usernames.py core logic (only VLM_MODEL constant if user explicitly requests model swap)</standard>
+      <standard>Setup scripts must fail gracefully with helpful error messages</standard>
+      <standard>Requirements.txt must not break existing installations (use compatible version ranges)</standard>
+    </code>
+
+    <user_experience>
+      <standard>Installation should take <15 minutes on typical hardware with decent internet</standard>
+      <standard>First successful extraction should happen within 5 minutes of completing installation</standard>
+      <standard>Error messages should guide users to solution (not just "failed", but "failed because X, try Y")</standard>
+    </user_experience>
+  </quality_standards>
+
+  <success_criteria>
+    <criterion>README enables a non-developer to install and run the tool independently</criterion>
+    <criterion>Setup scripts reduce installation steps by 50%+ compared to manual process</criterion>
+    <criterion>VLM alternatives research provides actionable upgrade path if user needs better accuracy</criterion>
+    <criterion>All commits follow conventional commits format and are atomic</criterion>
+    <criterion>Repository passes "fresh clone on clean OS" test (install and run on Ubuntu VM)</criterion>
+  </success_criteria>
+
+  <notes>
+    <note priority="critical">Do NOT modify crop region constants (TOP_OFFSET, CROP_HEIGHT, etc.) without explicit user request and test data</note>
+    <note priority="critical">Do NOT split extract_usernames.py into multiple files (single-file architecture is intentional)</note>
+    <note priority="high">When writing README, prioritize clarity over completeness—better to have working subset than overwhelming wall of text</note>
+    <note priority="medium">VLM alternatives section should acknowledge qwen2.5vl:3b is deliberate choice, not placeholder pending "better" model</note>
+    <note priority="medium">If Ollama API changes or qwen2.5vl:3b is deprecated, fallback is EasyOCR-only mode (already implemented with --no-vlm)</note>
+  </notes>
+</task_specification>
