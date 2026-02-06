@@ -22,15 +22,25 @@ CROP_HEIGHT = 90
 LEFT_MARGIN = 100
 RIGHT_MARGIN = 100
 
-OUTPUT_DIR = Path.home() / "Desktop" / "leads"
-DEBUG_DIR = Path.home() / "Desktop" / "ocr_debug"
+DEFAULT_OUTPUT_DIR = Path.home() / "Desktop" / "leads"
+DEFAULT_DEBUG_DIR = Path.home() / "Desktop" / "ocr_debug"
 
-DEBUG_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR = None
+DEBUG_DIR = None
+VERIFIED_FILE = None
+REVIEW_FILE = None
+REPORT_FILE = None
 
-VERIFIED_FILE = OUTPUT_DIR / "verified_usernames.md"
-REVIEW_FILE = OUTPUT_DIR / "needs_review.md"
-REPORT_FILE = OUTPUT_DIR / "extraction_report.md"
+
+def setup_directories(output_dir=None):
+    global OUTPUT_DIR, DEBUG_DIR, VERIFIED_FILE, REVIEW_FILE, REPORT_FILE
+    OUTPUT_DIR = Path(output_dir) if output_dir else DEFAULT_OUTPUT_DIR
+    DEBUG_DIR = OUTPUT_DIR.parent / "ocr_debug"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    VERIFIED_FILE = OUTPUT_DIR / "verified_usernames.md"
+    REVIEW_FILE = OUTPUT_DIR / "needs_review.md"
+    REPORT_FILE = OUTPUT_DIR / "extraction_report.md"
 
 VLM_MODEL = 'qwen2.5vl:3b'
 
@@ -79,17 +89,21 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s                        # Uses default: ~/Desktop/leads_images
   %(prog)s my_images             # Uses ~/Desktop/my_images
   %(prog)s /path/to/folder       # Uses absolute path
+  %(prog)s images --output /tmp  # Custom output directory
+  %(prog)s images --no-vlm       # Disable VLM, EasyOCR only
         """
     )
-    
+
     parser.add_argument(
         'folder',
-        nargs='?',
-        default='leads_images',
-        help='Folder name (on Desktop) or absolute path to images (default: leads_images)'
+        help='Folder name (resolved relative to ~/Desktop) or absolute path to images'
+    )
+    parser.add_argument(
+        '--output',
+        default=None,
+        help='Output directory for results (default: ~/Desktop/leads)'
     )
     parser.add_argument(
         '--diagnostics',
@@ -97,9 +111,9 @@ Examples:
         help='Save debug images and per-image JSON diagnostics'
     )
     parser.add_argument(
-        '--vlm',
+        '--no-vlm',
         action='store_true',
-        help='Use Qwen2.5-VL via Ollama as second opinion for low-confidence results (requires: ollama + qwen2.5vl model)'
+        help='Disable VLM second opinion (EasyOCR only)'
     )
 
     args = parser.parse_args()
@@ -110,7 +124,9 @@ Examples:
     else:
         input_dir = Path.home() / "Desktop" / args.folder
 
-    return input_dir, args.diagnostics, args.vlm
+    use_vlm = not args.no_vlm
+
+    return input_dir, args.diagnostics, use_vlm, args.output
 
 
 def load_existing_usernames():
@@ -939,11 +955,12 @@ def main():
     print("Instagram Username Extractor - Universal GPU/CPU Acceleration")
     print("="*70 + "\n")
     
-    input_dir, diagnostics, use_vlm = parse_arguments()
+    input_dir, diagnostics, use_vlm, output_dir = parse_arguments()
+    setup_directories(output_dir)
 
     if not input_dir.exists():
         print(f"❌ Error: Directory not found: {input_dir}")
-        print(f"\n💡 Tip: Place images in ~/Desktop/leads_images or specify custom path")
+        print(f"\n💡 Tip: Provide a folder name on Desktop or an absolute path")
         return
     
     print("🔍 Detecting hardware...\n")

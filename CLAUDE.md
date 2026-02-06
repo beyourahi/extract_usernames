@@ -9,23 +9,20 @@ Single-file Python CLI tool that extracts Instagram usernames from screenshots u
 ## Running
 
 ```bash
-# Default: reads images from ~/Desktop/leads_images/
-python3 extract_usernames.py
-
-# Custom folder on Desktop
+# Folder name on Desktop (required argument)
 python3 extract_usernames.py my_folder
 
 # Absolute path
 python3 extract_usernames.py /path/to/images
 
+# Custom output directory (default: ~/Desktop/leads)
+python3 extract_usernames.py my_folder --output /path/to/output
+
 # With diagnostic output (debug images + JSON)
 python3 extract_usernames.py my_folder --diagnostics
 
-# With VLM second opinion (requires Ollama + qwen2.5vl model)
-python3 extract_usernames.py my_folder --vlm
-
-# Both flags
-python3 extract_usernames.py my_folder --vlm --diagnostics
+# Disable VLM (EasyOCR only)
+python3 extract_usernames.py my_folder --no-vlm
 ```
 
 No test suite or build system exists. The project is a single script (`extract_usernames.py`).
@@ -35,13 +32,13 @@ No test suite or build system exists. The project is a single script (`extract_u
 ```bash
 pip install easyocr torch torchvision opencv-python
 
-# Optional: for --vlm mode
+# VLM support (runs by default, gracefully degrades if unavailable)
 brew install ollama          # macOS (or see https://ollama.com for other platforms)
 ollama pull qwen2.5vl:3b    # downloads ~3.2GB model
 pip install ollama           # Python client
 ```
 
-EasyOCR downloads ~50MB of models on first run (cached locally). Ollama must be running (`ollama serve`) before using `--vlm`.
+EasyOCR downloads ~50MB of models on first run (cached locally). VLM runs by default via Ollama — if Ollama is not running or the model isn't pulled, the script falls back to EasyOCR-only automatically. Use `--no-vlm` to explicitly disable.
 
 ## Architecture
 
@@ -56,7 +53,7 @@ Everything lives in `extract_usernames.py`. The processing pipeline:
 4. **Multi-pass OCR with weighted voting** (`ocr_extract_username`) — EasyOCR reader (singleton via `get_ocr_reader`) runs on all 3 preprocessing variants. Aggressive variant is weighted 2x in voting (empirically most accurate). Consensus requires weight >= 3 (aggressive + one other). Falls back to highest-confidence single result. Also tries concatenating adjacent text segments (sorted by x-coordinate) to recover usernames split at underscores.
 5. **Username validation** (`clean_username`) — enforces Instagram rules: 1-30 chars, alphanumeric/dots/underscores, must start alphanumeric, can't end with period. Preserves trailing underscores (valid on Instagram).
 6. **Image quality scoring** (`calculate_image_quality`, `adjust_confidence`) — measures sharpness (Laplacian variance), contrast (std deviation), and brightness consistency. Only penalizes very low quality (<0.5); no boost for high quality (prevents inflating borderline results).
-7. **VLM second opinion** (opt-in via `--vlm`) — after EasyOCR produces a result, sends the cropped image to Qwen2.5-VL via Ollama for an independent read. Consensus logic: if both agree, confidence is boosted to >=90%. If they disagree by <=2 edit distance, the longer result is preferred (preserves underscores/dots that one engine may drop). If they disagree by >2 edits, VLM result is preferred at 85% confidence. If EasyOCR fails entirely, VLM acts as a rescue at 80% confidence. Gracefully degrades to EasyOCR-only if Ollama is unavailable.
+7. **VLM second opinion** (on by default, disable with `--no-vlm`) — after EasyOCR produces a result, sends the cropped image to Qwen2.5-VL via Ollama for an independent read. Consensus logic: if both agree, confidence is boosted to >=90%. If they disagree by <=2 edit distance, the longer result is preferred (preserves underscores/dots that one engine may drop). If they disagree by >2 edits, VLM result is preferred at 85% confidence. If EasyOCR fails entirely, VLM acts as a rescue at 80% confidence. Gracefully degrades to EasyOCR-only if Ollama is unavailable.
 8. **Confidence-only categorization** — verified HIGH (>=90%), verified MED (>=80%), review (<80%), failed (no extraction). No HTTP verification (Instagram requires auth for all profile requests since mid-2024).
 9. **Near-duplicate detection** (`find_similar_existing`) — Levenshtein distance check against existing usernames. Near-duplicates (edit distance <=2) are flagged for review rather than auto-verified.
 10. **Within-batch deduplication** — `append_to_files()` tracks a `seen` set to prevent the same username from being written twice in a single run.
@@ -76,7 +73,7 @@ RIGHT_MARGIN = 100 # right padding
 
 ## Output Paths
 
-All output goes to `~/Desktop/leads/`. When `--diagnostics` is passed, debug images go to `~/Desktop/ocr_debug/` and a JSON dump goes to `~/Desktop/leads/validation_raw_results.json`. Without `--diagnostics`, the debug directory is cleaned up automatically.
+All output goes to `~/Desktop/leads/` by default (override with `--output`). When `--diagnostics` is passed, debug images go to a sibling `ocr_debug/` directory and a JSON dump goes to the output directory as `validation_raw_results.json`. Without `--diagnostics`, the debug directory is cleaned up automatically. All directories are created with `parents=True` for cross-platform compatibility.
 
 ## Repository Etiquette
 
@@ -119,6 +116,6 @@ perf:     performance improvements
 
 8. **Debug directory behavior** — `~/Desktop/ocr_debug/` is created at module load time. Without `--diagnostics`, it is deleted at the end of a successful run via `shutil.rmtree()`. With `--diagnostics`, it is preserved along with a JSON dump. Do not store anything important there.
 
-9. **VLM mode requires Ollama running** — `--vlm` depends on a local Ollama server (`localhost:11434`). If Ollama is not running or the model isn't pulled, the script warns and falls back to EasyOCR-only. VLM calls are serialized through a single Ollama instance (one image at a time), so it is the processing bottleneck in `--vlm` mode. Workers are reduced to 2 when `--vlm` is enabled to leave memory headroom for the model (~3.2GB for `qwen2.5vl:3b`).
+9. **VLM runs by default** — VLM depends on a local Ollama server (`localhost:11434`). If Ollama is not running or the model isn't pulled, the script warns and falls back to EasyOCR-only. Use `--no-vlm` to explicitly disable. VLM calls are serialized through a single Ollama instance (one image at a time), so it is the processing bottleneck. Workers are reduced to 2 when VLM is active to leave memory headroom for the model (~3.2GB for `qwen2.5vl:3b`).
 
 10. **VLM consensus heuristic is tuned for underscore/dot preservation** — The "prefer longer result when edit distance <=2" rule exists specifically because EasyOCR tends to drop underscores and dots while VLMs preserve them. Do not change this heuristic without regression testing against `ground_truth.csv`.
