@@ -44,7 +44,7 @@ def detect_hardware():
         'architecture': platform.machine(),
         'platform': platform.system(),
         'cpu_cores': cpu_count(),
-        'optimal_workers': min(4, max(1, cpu_count() - 1))
+        'optimal_workers': min(6, max(1, cpu_count() - 1))
     }
     
     if torch.cuda.is_available():
