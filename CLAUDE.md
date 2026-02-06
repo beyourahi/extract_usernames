@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Single-file Python CLI tool that extracts Instagram usernames from screenshots using EasyOCR with GPU acceleration. It crops a specific region of each screenshot (where the Instagram username appears), runs OCR, validates the username format, verifies it exists via HTTP HEAD request to instagram.com, and categorizes results into verified/review/failed.
+Single-file Python CLI tool that extracts Instagram usernames from screenshots using EasyOCR with GPU acceleration. It crops a specific region of each screenshot (where the Instagram username appears), runs multi-pass OCR with weighted voting, validates the username format, and categorizes results into verified/review/failed based on OCR confidence.
 
 **Project Type**: Single-script Python CLI tool (no framework, no build system, no tests)
 
@@ -17,6 +17,9 @@ python3 extract_usernames.py my_folder
 
 # Absolute path
 python3 extract_usernames.py /path/to/images
+
+# With diagnostic output (debug images + JSON)
+python3 extract_usernames.py my_folder --diagnostics
 ```
 
 No test suite or build system exists. The project is a single script (`extract_usernames.py`).
@@ -24,7 +27,7 @@ No test suite or build system exists. The project is a single script (`extract_u
 ## Dependencies
 
 ```bash
-pip install easyocr torch torchvision opencv-python pillow requests
+pip install easyocr torch torchvision opencv-python
 ```
 
 EasyOCR downloads ~50MB of models on first run (cached locally).
@@ -39,15 +42,14 @@ Everything lives in `extract_usernames.py`. The processing pipeline:
    - `preprocess_balanced` — CLAHE → bilateral filter → 3x LANCZOS4 upscale → median blur → adaptive threshold → morphological close
    - `preprocess_aggressive` — CLAHE (high clip) → 4x LANCZOS4 upscale → Otsu threshold → morphological close (larger kernel)
    - `preprocess_minimal` — grayscale → 3x LANCZOS4 upscale → denoise → mean-based adaptive threshold
-4. **Multi-pass OCR with voting** (`ocr_extract_username`) — EasyOCR reader (singleton via `get_ocr_reader`) runs on all 3 preprocessing variants. If 2+ passes agree on a username, that consensus result is used. Otherwise the highest-confidence single result wins.
-5. **Username validation** (`clean_username`) — enforces Instagram rules: 1-30 chars, alphanumeric/dots/underscores, must start alphanumeric, can't end with period.
-6. **Character confusion correction** (`generate_username_candidates`) — generates up to 10 variants of the OCR result by substituting commonly confused characters (l/1/i, o/0, rn/m, vv/w, cl/d, ii/u). Each candidate is checked against Instagram before falling back to the original.
-7. **Image quality scoring** (`calculate_image_quality`, `adjust_confidence`) — measures sharpness (Laplacian variance), contrast (std deviation), and brightness consistency. Adjusts OCR confidence up or down based on image quality.
-8. **Verification** (`check_instagram_exists`) — HTTP HEAD to `instagram.com/{username}/` with retry logic (3 attempts, exponential backoff on 429 rate limiting). Returns True/False/None.
-9. **Tiered categorization** — verified (≥70% adjusted confidence + URL exists), unverified (≥70% + network error), review (<70% or URL 404), failed (no extraction). Verified results are further tagged HIGH (≥85%) or MED (70-84%).
-10. **Near-duplicate detection** (`find_similar_existing`) — Levenshtein distance check against existing usernames. Near-duplicates (edit distance ≤2) are flagged for review rather than auto-verified.
-11. **Parallel processing** — `multiprocessing.Pool` distributes images across workers. Note: the global `_ocr_reader` singleton does NOT carry across processes; each worker initializes its own reader.
-12. **Output** — appends to markdown files in `~/Desktop/leads/`: `verified_usernames.md`, `needs_review.md`, `extraction_report.md`. Tracks existing usernames to skip duplicates and near-duplicates across runs.
+4. **Multi-pass OCR with weighted voting** (`ocr_extract_username`) — EasyOCR reader (singleton via `get_ocr_reader`) runs on all 3 preprocessing variants. Aggressive variant is weighted 2x in voting (empirically most accurate). Consensus requires weight >= 3 (aggressive + one other). Falls back to highest-confidence single result. Also tries concatenating adjacent text segments (sorted by x-coordinate) to recover usernames split at underscores.
+5. **Username validation** (`clean_username`) — enforces Instagram rules: 1-30 chars, alphanumeric/dots/underscores, must start alphanumeric, can't end with period. Preserves trailing underscores (valid on Instagram).
+6. **Image quality scoring** (`calculate_image_quality`, `adjust_confidence`) — measures sharpness (Laplacian variance), contrast (std deviation), and brightness consistency. Only penalizes very low quality (<0.5); no boost for high quality (prevents inflating borderline results).
+7. **Confidence-only categorization** — verified HIGH (>=90%), verified MED (>=80%), review (<80%), failed (no extraction). No HTTP verification (Instagram requires auth for all profile requests since mid-2024).
+8. **Near-duplicate detection** (`find_similar_existing`) — Levenshtein distance check against existing usernames. Near-duplicates (edit distance <=2) are flagged for review rather than auto-verified.
+9. **Within-batch deduplication** — `append_to_files()` tracks a `seen` set to prevent the same username from being written twice in a single run.
+10. **Parallel processing** — `multiprocessing.Pool` distributes images across workers. Note: the global `_ocr_reader` singleton does NOT carry across processes; each worker initializes its own reader.
+11. **Output** — appends to markdown files in `~/Desktop/leads/`: `verified_usernames.md`, `needs_review.md`, `extraction_report.md`. Tracks existing usernames to skip duplicates and near-duplicates across runs.
 
 ## Key Constants
 
@@ -62,7 +64,7 @@ RIGHT_MARGIN = 100 # right padding
 
 ## Output Paths
 
-All output goes to `~/Desktop/leads/`. Debug images (first 5 processed) go to `~/Desktop/ocr_debug/` and are deleted after a successful run.
+All output goes to `~/Desktop/leads/`. When `--diagnostics` is passed, debug images go to `~/Desktop/ocr_debug/` and a JSON dump goes to `~/Desktop/leads/validation_raw_results.json`. Without `--diagnostics`, the debug directory is cleaned up automatically.
 
 ## Repository Etiquette
 
@@ -95,7 +97,7 @@ perf:     performance improvements
 
 3. **OCR reader singleton does NOT cross process boundaries** — `_ocr_reader` is a module-level global. Each `multiprocessing.Pool` worker initializes its own reader instance. Do not attempt to share the reader across processes or pass it as an argument.
 
-4. **Instagram verification is rate-limited** — `check_instagram_exists()` makes HTTP HEAD requests to instagram.com with retry logic and exponential backoff. High-volume runs may still trigger rate limiting or IP blocks. The function catches `requests.RequestException` and returns `None` (unverified) after exhausting retries.
+4. **No HTTP verification** — Instagram requires authentication for all profile page requests (since mid-2024). HTTP HEAD/GET returns 200 for all usernames (real or fake) because the login page always responds 200. Classification relies entirely on OCR confidence.
 
 5. **Output files are append-only** — `verified_usernames.md` and `needs_review.md` are designed for incremental appending across multiple runs. The duplicate detection in `load_existing_usernames()` relies on specific markdown formatting patterns (numbered lists with regex). Do not change the output format without updating the corresponding regex patterns.
 
@@ -103,4 +105,4 @@ perf:     performance improvements
 
 7. **Worker count capped at 4** — `optimal_workers` is `min(4, max(1, cpu_count() - 1))`. This is intentional to prevent system freezing. Do not increase this cap without understanding memory implications (each worker loads its own EasyOCR model).
 
-8. **Debug directory is auto-deleted** — `~/Desktop/ocr_debug/` is created at module load time and deleted via `shutil.rmtree()` at the end of a successful run. Do not store anything important there.
+8. **Debug directory behavior** — `~/Desktop/ocr_debug/` is created at module load time. Without `--diagnostics`, it is deleted at the end of a successful run via `shutil.rmtree()`. With `--diagnostics`, it is preserved along with a JSON dump. Do not store anything important there.

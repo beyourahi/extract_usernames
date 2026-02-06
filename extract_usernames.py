@@ -3,18 +3,15 @@
 import warnings
 warnings.filterwarnings('ignore', category=UserWarning, module='torch.utils.data.dataloader')
 
-import os
 import re
 import time
 import shutil
 import argparse
 import platform
 from pathlib import Path
-from PIL import Image
 import cv2
 import numpy as np
 import easyocr
-import requests
 import torch
 from datetime import datetime
 from multiprocessing import Pool, cpu_count
@@ -92,16 +89,21 @@ Examples:
         default='leads_images',
         help='Folder name (on Desktop) or absolute path to images (default: leads_images)'
     )
-    
+    parser.add_argument(
+        '--diagnostics',
+        action='store_true',
+        help='Save debug images and per-image JSON diagnostics'
+    )
+
     args = parser.parse_args()
     folder_path = Path(args.folder)
-    
+
     if folder_path.is_absolute():
         input_dir = folder_path
     else:
         input_dir = Path.home() / "Desktop" / args.folder
-    
-    return input_dir
+
+    return input_dir, args.diagnostics
 
 
 def load_existing_usernames():
@@ -180,6 +182,154 @@ def get_ocr_reader(use_gpu=True):
     return _ocr_reader
 
 
+def _bbox_x_center(bbox):
+    xs = [point[0] for point in bbox]
+    return sum(xs) / len(xs)
+
+
+def _try_concat_segments(ocr_results):
+    if len(ocr_results) < 2:
+        return []
+
+    sorted_results = sorted(ocr_results, key=lambda r: _bbox_x_center(r[0]))
+
+    candidates = []
+    for start in range(len(sorted_results)):
+        combined_text = ''
+        min_conf = float('inf')
+        for end in range(start, min(start + 4, len(sorted_results))):
+            _, text, conf = sorted_results[end]
+            combined_text += text
+            min_conf = min(min_conf, conf)
+
+            if end == start:
+                continue
+
+            username = clean_username(combined_text)
+            if username and len(username) > 3:
+                candidates.append((username, min_conf * 100))
+
+    return candidates
+
+
+def _is_dotted_sibling(candidate, winner):
+    """Check if candidate is a dotted version of winner.
+
+    Returns True if they differ only by dots — candidate has '.' where
+    winner has 'o' (dot misread as letter), or candidate has '.' that
+    winner dropped entirely.
+    """
+    if candidate == winner:
+        return False
+    if '.' not in candidate:
+        return False
+
+    # Try matching character-by-character allowing:
+    # - candidate '.' vs winner 'o' (dot read as 'o')
+    # - candidate '.' where winner has nothing (dot dropped)
+    ci, wi = 0, 0
+    while ci < len(candidate) and wi < len(winner):
+        if candidate[ci] == winner[wi]:
+            ci += 1
+            wi += 1
+        elif candidate[ci] == '.':
+            if wi < len(winner) and winner[wi] in 'oO0':
+                # dot was misread as o/0
+                ci += 1
+                wi += 1
+            else:
+                # dot was dropped in winner
+                ci += 1
+        else:
+            return False
+
+    # Allow trailing chars in either side only if they're dots
+    while ci < len(candidate):
+        if candidate[ci] != '.':
+            return False
+        ci += 1
+    while wi < len(winner):
+        if winner[wi] in 'oO0':
+            wi += 1
+        else:
+            return False
+
+    return True
+
+
+def _find_dotted_sibling(winner_username, results_per_variant, winner_conf):
+    """Find a dotted variant of the winning username from other variants.
+
+    Returns (username, confidence) if a dotted sibling is found with
+    sufficient confidence, else None.
+    """
+    best_dotted = None
+    best_dotted_conf = 0
+
+    for r in results_per_variant:
+        candidate = r['username']
+        if candidate == winner_username:
+            continue
+        if _is_dotted_sibling(candidate, winner_username):
+            if r['confidence'] > best_dotted_conf:
+                best_dotted = candidate
+                best_dotted_conf = r['confidence']
+
+    # Accept the dotted version if its confidence is at least 70% of the winner's
+    if best_dotted and best_dotted_conf >= winner_conf * 0.70:
+        return best_dotted, best_dotted_conf
+
+    return None
+
+
+# Known OCR confusion pairs: (misread, correct)
+# When two variants disagree and one contains a misread pattern while
+# the other contains the correct pattern, prefer the correct one.
+CONFUSION_CORRECTIONS = [
+    ('tf', 'ff'),   # ejlifestyleotficial -> ejlifestyleofficial
+    ('a', '4'),     # secretshop2a -> secretshop24
+    ('x', 'd'),     # lyonorabx -> lyonorabd
+    ('cl', 'd'),
+    ('rn', 'm'),
+    ('vv', 'w'),
+    ('ii', 'u'),
+    ('l', '1'),
+    ('0', 'o'),
+]
+
+
+def _find_confusion_correction(winner_username, results_per_variant, winner_conf):
+    """Check if any variant has a correction for a known OCR confusion pattern.
+
+    When two variants produce usernames that differ only by a known confusion
+    pair, prefer the variant whose text contains the 'correct' side of the pair.
+    Returns (username, confidence) or None.
+    """
+    for r in results_per_variant:
+        candidate = r['username']
+        if candidate == winner_username:
+            continue
+
+        # Only consider candidates that are very similar (differ by 1-2 chars)
+        dist = levenshtein_distance(candidate, winner_username)
+        if dist == 0 or dist > 3:
+            continue
+
+        # Check each confusion pair: does the difference match a known pattern?
+        for misread, correct in CONFUSION_CORRECTIONS:
+            # Case 1: winner has the misread, candidate has the correct
+            if misread in winner_username and correct in candidate:
+                fixed = winner_username.replace(misread, correct, 1)
+                if fixed == candidate:
+                    # Candidate is the corrected version — accept if confidence
+                    # is at least 55% of winner (lower bar because confusion
+                    # corrections are high-value even at lower confidence)
+                    if r['confidence'] >= winner_conf * 0.55:
+                        return candidate, r['confidence']
+
+    return None
+
+
 def ocr_extract_username(img_cv, use_gpu=True):
     reader = get_ocr_reader(use_gpu)
     results_per_variant = []
@@ -198,6 +348,14 @@ def ocr_extract_username(img_cv, use_gpu=True):
                     best_username = username
                     best_confidence = confidence * 100
 
+            for username, conf in _try_concat_segments(ocr_results):
+                if len(username) > len(best_username or '') and conf >= best_confidence * 0.85:
+                    best_username = username
+                    best_confidence = conf
+                elif len(username) == len(best_username or '') and conf > best_confidence:
+                    best_username = username
+                    best_confidence = conf
+
             if best_username:
                 results_per_variant.append({
                     'username': best_username,
@@ -208,23 +366,54 @@ def ocr_extract_username(img_cv, use_gpu=True):
             continue
 
     if not results_per_variant:
-        return None, 0
+        return None, 0, {'variants': [], 'winning_method': None}
 
     votes = {}
     for r in results_per_variant:
         u = r['username']
         if u not in votes:
             votes[u] = {'count': 0, 'total_conf': 0, 'max_conf': 0}
-        votes[u]['count'] += 1
+        weight = 2 if r['variant'] == 'aggressive' else 1
+        votes[u]['count'] += weight
         votes[u]['total_conf'] += r['confidence']
         votes[u]['max_conf'] = max(votes[u]['max_conf'], r['confidence'])
 
+    diag = {'variants': results_per_variant}
+
     for username, v in sorted(votes.items(), key=lambda x: x[1]['count'], reverse=True):
-        if v['count'] >= 2:
-            return username, v['total_conf'] / v['count']
+        if v['count'] >= 3:
+            diag['winning_method'] = 'consensus'
+            avg_conf = v['total_conf'] / sum(1 for r in results_per_variant if r['username'] == username)
+            # P2.8: Cross-variant dot reconciliation (also for consensus winners)
+            dotted = _find_dotted_sibling(username, results_per_variant, avg_conf)
+            if dotted:
+                diag['dot_reconciled_from'] = username
+                return dotted[0], dotted[1], diag
+            # P2.9: Cross-variant character confusion correction
+            corrected = _find_confusion_correction(username, results_per_variant, avg_conf)
+            if corrected:
+                diag['confusion_corrected_from'] = username
+                return corrected[0], corrected[1], diag
+            return username, avg_conf, diag
 
     best = max(results_per_variant, key=lambda x: x['confidence'])
-    return best['username'], best['confidence']
+    diag['winning_method'] = 'highest_confidence'
+    winner_username = best['username']
+    winner_conf = best['confidence']
+
+    # P2.8: Cross-variant dot reconciliation
+    dotted = _find_dotted_sibling(winner_username, results_per_variant, winner_conf)
+    if dotted:
+        diag['dot_reconciled_from'] = winner_username
+        winner_username, winner_conf = dotted
+
+    # P2.9: Cross-variant character confusion correction
+    corrected = _find_confusion_correction(winner_username, results_per_variant, winner_conf)
+    if corrected:
+        diag['confusion_corrected_from'] = winner_username
+        winner_username, winner_conf = corrected
+
+    return winner_username, winner_conf, diag
 
 
 def clean_username(text):
@@ -234,7 +423,8 @@ def clean_username(text):
     text = text.lower().strip()
     text = re.sub(r'\s+', '', text)
     text = re.sub(r'[^\w._]', '', text)
-    text = text.strip('._')
+    text = text.lstrip('._')
+    text = text.rstrip('.')
     
     if len(text) < 1 or len(text) > 30:
         return None
@@ -250,47 +440,6 @@ def clean_username(text):
     
     return text
 
-
-CHAR_CONFUSION = {
-    'l': ['1', 'i'],
-    '1': ['l', 'i'],
-    'i': ['l', '1'],
-    'o': ['0'],
-    '0': ['o'],
-}
-
-MULTI_CHAR_CONFUSION = [
-    ('rn', 'm'),
-    ('m', 'rn'),
-    ('vv', 'w'),
-    ('w', 'vv'),
-    ('cl', 'd'),
-    ('ii', 'u'),
-]
-
-
-def generate_username_candidates(username):
-    if not username:
-        return []
-
-    candidates = [username]
-
-    for i, char in enumerate(username):
-        if char in CHAR_CONFUSION:
-            for replacement in CHAR_CONFUSION[char]:
-                candidate = username[:i] + replacement + username[i+1:]
-                cleaned = clean_username(candidate)
-                if cleaned and cleaned not in candidates:
-                    candidates.append(cleaned)
-
-    for wrong, right in MULTI_CHAR_CONFUSION:
-        if wrong in username:
-            candidate = username.replace(wrong, right, 1)
-            cleaned = clean_username(candidate)
-            if cleaned and cleaned not in candidates:
-                candidates.append(cleaned)
-
-    return candidates[:10]
 
 
 def levenshtein_distance(s1, s2):
@@ -343,8 +492,8 @@ def calculate_image_quality(img_cv):
 
 
 def adjust_confidence(confidence, quality_score):
-    if quality_score > 0.7:
-        adjusted = confidence * (1 + (quality_score - 0.7) * 0.3)
+    if quality_score < 0.3:
+        adjusted = confidence * (0.5 + quality_score)
     elif quality_score < 0.5:
         adjusted = confidence * (0.7 + quality_score * 0.6)
     else:
@@ -352,35 +501,11 @@ def adjust_confidence(confidence, quality_score):
     return min(adjusted, 100)
 
 
-def check_instagram_exists(username, max_retries=3):
-    url = f"https://www.instagram.com/{username}/"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-    }
-
-    for attempt in range(max_retries):
-        try:
-            response = requests.head(url, headers=headers, timeout=5, allow_redirects=True)
-            if response.status_code == 200:
-                return True
-            elif response.status_code == 429:
-                time.sleep(2 ** attempt)
-                continue
-            else:
-                return False
-        except requests.RequestException:
-            if attempt < max_retries - 1:
-                time.sleep(1)
-                continue
-            return None
-
-    return None
-
 
 def extract_username_from_image_parallel(args):
-    image_path, image_index, total_images, existing_usernames, use_gpu = args
+    image_path, image_index, total_images, existing_usernames, use_gpu, diagnostics = args
 
-    result = extract_username_from_image(image_path, use_gpu, save_debug=(image_index <= 5))
+    result = extract_username_from_image(image_path, use_gpu, save_debug=diagnostics)
     result['filename'] = image_path.name
     result['index'] = image_index
     result['is_duplicate'] = False
@@ -416,17 +541,13 @@ def extract_username_from_image_parallel(args):
         username_display = result['username']
 
         if result['status'] == 'verified':
+            tier = "HIGH" if result['confidence'] >= 90 else "MED"
             status_icon = "✅"
-            detail_text = f" ({result['confidence']:.0f}% | URL: ✅)"
-
-        elif result['status'] == 'unverified':
-            status_icon = "⚠️"
-            detail_text = f" ({result['confidence']:.0f}% | URL: ⚠️ network error)"
+            detail_text = f" ({result['confidence']:.0f}% {tier})"
 
         else:
             status_icon = "⚠️"
-            url_icon = "✅" if result['verified'] is True else "❌" if result['verified'] is False else "⚠️"
-            detail_text = f" ({result['confidence']:.0f}% | URL: {url_icon})"
+            detail_text = f" ({result['confidence']:.0f}% review)"
 
     print(f"[{image_index}/{total_images}] {image_path.name} -> {status_icon} {username_display}{detail_text}")
 
@@ -446,11 +567,14 @@ def extract_username_from_image(image_path, use_gpu=True, save_debug=False):
         cropped = img_cv[top:bottom, left:right]
 
         if save_debug:
-            debug_path = DEBUG_DIR / f"{image_path.stem}_crop.png"
-            preprocessed = preprocess_balanced(cropped)
-            cv2.imwrite(str(debug_path), preprocessed)
+            cv2.imwrite(str(DEBUG_DIR / f"{image_path.stem}_crop.png"), cropped)
+            for vname, vfunc in PREPROCESS_VARIANTS:
+                try:
+                    cv2.imwrite(str(DEBUG_DIR / f"{image_path.stem}_{vname}.png"), vfunc(cropped))
+                except Exception:
+                    pass
 
-        username, confidence = ocr_extract_username(cropped, use_gpu)
+        username, confidence, ocr_diag = ocr_extract_username(cropped, use_gpu)
 
         if not username:
             return {
@@ -459,43 +583,30 @@ def extract_username_from_image(image_path, use_gpu=True, save_debug=False):
                 'verified': False,
                 'status': 'failed',
                 'quality': 0,
+                'variants_detail': ocr_diag.get('variants', []),
+                'winning_method': None,
             }
 
         quality = calculate_image_quality(cropped)
+        raw_confidence = confidence
         confidence = adjust_confidence(confidence, quality)
 
-        candidates = generate_username_candidates(username)
-        best_username = username
-        url_verified = None
-
-        for candidate in candidates:
-            result = check_instagram_exists(candidate)
-            if result is True:
-                best_username = candidate
-                url_verified = True
-                break
-            elif result is False and url_verified is None:
-                url_verified = False
-            elif result is None and url_verified is None:
-                url_verified = None
-
-        username = best_username
-
-        if confidence >= 85 and url_verified is True:
+        if confidence >= 90:
             status = 'verified'
-        elif confidence >= 70 and url_verified is True:
+        elif confidence >= 80:
             status = 'verified'
-        elif confidence >= 70 and url_verified is None:
-            status = 'unverified'
         else:
             status = 'review'
 
         return {
             'username': username,
             'confidence': confidence,
-            'verified': url_verified,
+            'verified': None,
             'status': status,
             'quality': quality,
+            'raw_confidence': raw_confidence,
+            'variants_detail': ocr_diag.get('variants', []),
+            'winning_method': ocr_diag.get('winning_method'),
         }
 
     except Exception as e:
@@ -510,15 +621,29 @@ def extract_username_from_image(image_path, use_gpu=True, save_debug=False):
 
 
 def append_to_files(new_results, existing_usernames):
-    new_verified = [r for r in new_results
-                    if r['status'] == 'verified'
-                    and not r.get('is_duplicate', False)
-                    and not r.get('is_near_duplicate', False)]
+    seen_in_batch = set()
+    deduped_verified = []
+    deduped_review = []
 
-    new_review = [r for r in new_results
-                  if (r['status'] in ['review', 'unverified', 'error']
-                      or r.get('is_near_duplicate', False))
-                  and not r.get('is_duplicate', False)]
+    for r in new_results:
+        if r.get('is_duplicate', False):
+            continue
+        username = r.get('username')
+        if not username:
+            if r['status'] in ['failed', 'error']:
+                deduped_review.append(r)
+            continue
+        if username in seen_in_batch:
+            continue
+        seen_in_batch.add(username)
+
+        if r['status'] == 'verified' and not r.get('is_near_duplicate', False):
+            deduped_verified.append(r)
+        elif r['status'] in ['review', 'error'] or r.get('is_near_duplicate', False):
+            deduped_review.append(r)
+
+    new_verified = deduped_verified
+    new_review = deduped_review
 
     if new_verified:
         current_count = 0
@@ -537,7 +662,7 @@ def append_to_files(new_results, existing_usernames):
             for i, item in enumerate(new_verified, current_count + 1):
                 url = f"https://www.instagram.com/{item['username']}"
                 conf = item['confidence']
-                tier = "HIGH" if conf >= 85 else "MED"
+                tier = "HIGH" if conf >= 90 else "MED"
                 f.write(f"{i}. {item['username']} - {url} [{tier} {conf:.0f}%]\n")
 
         update_file_header(VERIFIED_FILE, current_count + len(new_verified))
@@ -608,13 +733,13 @@ def generate_report(hardware_info, input_dir, results, elapsed_time, new_verifie
     total = len(results)
     verified = sum(1 for r in results if r['status'] == 'verified'
                    and not r.get('is_duplicate') and not r.get('is_near_duplicate'))
-    review = sum(1 for r in results if r['status'] in ['review', 'unverified']
+    review = sum(1 for r in results if r['status'] == 'review'
                  or r.get('is_near_duplicate', False))
     failed = sum(1 for r in results if r['status'] in ['failed', 'error'])
     duplicates = sum(1 for r in results if r.get('is_duplicate', False))
     near_dupes = sum(1 for r in results if r.get('is_near_duplicate', False))
-    high_conf = sum(1 for r in results if r['status'] == 'verified' and r['confidence'] >= 85)
-    med_conf = sum(1 for r in results if r['status'] == 'verified' and 70 <= r['confidence'] < 85)
+    high_conf = sum(1 for r in results if r['status'] == 'verified' and r['confidence'] >= 90)
+    med_conf = sum(1 for r in results if r['status'] == 'verified' and 80 <= r['confidence'] < 90)
 
     extracted = [r for r in results if r['username']]
     avg_confidence = sum(r['confidence'] for r in extracted) / max(1, len(extracted))
@@ -649,8 +774,8 @@ def generate_report(hardware_info, input_dir, results, elapsed_time, new_verifie
 ## Results Summary
 
 - ✅ **Verified:** {verified} ({verified/max(1,total)*100:.1f}%)
-  - HIGH confidence (>=85%): {high_conf}
-  - MED confidence (70-84%): {med_conf}
+  - HIGH confidence (>=90%): {high_conf}
+  - MED confidence (80-89%): {med_conf}
 - ⚠️ **Needs Review:** {review} ({review/max(1,total)*100:.1f}%)
 - ❌ **Failed:** {failed} ({failed/max(1,total)*100:.1f}%)
 - ⏭️ **Duplicates:** {duplicates} ({duplicates/max(1,total)*100:.1f}%)
@@ -679,8 +804,7 @@ def generate_report(hardware_info, input_dir, results, elapsed_time, new_verifie
 
 - **OCR Engine:** EasyOCR (multi-pass, 3 preprocessing variants)
 - **Preprocessing:** Balanced + Aggressive + Minimal (voting)
-- **Confidence Tiers:** HIGH >=85% | MED >=70% | REVIEW <70%
-- **Character Correction:** Enabled (confusion map + candidates)
+- **Confidence Tiers:** HIGH >=90% | MED >=80% | REVIEW <80%
 - **Near-Duplicate Detection:** Enabled (Levenshtein distance <=2)
 
 ---
@@ -708,8 +832,8 @@ def main():
     print("Instagram Username Extractor - Universal GPU/CPU Acceleration")
     print("="*70 + "\n")
     
-    input_dir = parse_arguments()
-    
+    input_dir, diagnostics = parse_arguments()
+
     if not input_dir.exists():
         print(f"❌ Error: Directory not found: {input_dir}")
         print(f"\n💡 Tip: Place images in ~/Desktop/leads_images or specify custom path")
@@ -741,7 +865,7 @@ def main():
     
     use_gpu = hardware_info['gpu_available']
     args_list = [
-        (path, idx, len(image_paths), existing_usernames, use_gpu)
+        (path, idx, len(image_paths), existing_usernames, use_gpu, diagnostics)
         for idx, path in enumerate(image_paths, 1)
     ]
     
@@ -757,9 +881,16 @@ def main():
     new_verified, new_review = append_to_files(results, existing_usernames)
     
     generate_report(hardware_info, input_dir, results, elapsed_time, new_verified, new_review)
-    
-    if DEBUG_DIR.exists():
-        shutil.rmtree(DEBUG_DIR)
+
+    if diagnostics:
+        import json
+        json_path = OUTPUT_DIR / "validation_raw_results.json"
+        with open(json_path, 'w', encoding='utf-8') as jf:
+            json.dump(results, jf, indent=2, default=str)
+        print(f"\n📋 Diagnostic JSON saved to {json_path}")
+    else:
+        if DEBUG_DIR.exists():
+            shutil.rmtree(DEBUG_DIR)
     
     print(f"\n{'='*70}")
     print("✅ EXTRACTION COMPLETE")
