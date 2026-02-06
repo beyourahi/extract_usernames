@@ -32,6 +32,8 @@ VERIFIED_FILE = OUTPUT_DIR / "verified_usernames.md"
 REVIEW_FILE = OUTPUT_DIR / "needs_review.md"
 REPORT_FILE = OUTPUT_DIR / "extraction_report.md"
 
+VLM_MODEL = 'qwen2.5vl:3b'
+
 
 def detect_hardware():
     hardware_info = {
@@ -94,6 +96,11 @@ Examples:
         action='store_true',
         help='Save debug images and per-image JSON diagnostics'
     )
+    parser.add_argument(
+        '--vlm',
+        action='store_true',
+        help='Use Qwen2.5-VL via Ollama as second opinion for low-confidence results (requires: ollama + qwen2.5vl model)'
+    )
 
     args = parser.parse_args()
     folder_path = Path(args.folder)
@@ -103,7 +110,7 @@ Examples:
     else:
         input_dir = Path.home() / "Desktop" / args.folder
 
-    return input_dir, args.diagnostics
+    return input_dir, args.diagnostics, args.vlm
 
 
 def load_existing_usernames():
@@ -416,6 +423,59 @@ def ocr_extract_username(img_cv, use_gpu=True):
     return winner_username, winner_conf, diag
 
 
+def check_ollama_available():
+    """Check if Ollama is running and the VLM model is pulled."""
+    try:
+        import ollama
+        result = ollama.list()
+        for m in result.models:
+            if VLM_MODEL.split(':')[0] in m.model:
+                return True, m.model
+        return False, f"Model not found. Run: ollama pull {VLM_MODEL}"
+    except ImportError:
+        return False, "ollama package not installed. Run: pip install ollama"
+    except Exception as e:
+        return False, f"Ollama server not running. Start it with: ollama serve\n   Error: {e}"
+
+
+def vlm_extract_username(img_cv):
+    """Extract username from cropped image using Qwen2.5-VL via Ollama.
+
+    Sends the raw cropped image (no preprocessing) to the VLM, which reads
+    text holistically — better at preserving underscores and dots that
+    EasyOCR tends to split or drop.
+
+    Returns (username, raw_response) or (None, error_message).
+    """
+    try:
+        import ollama
+    except ImportError:
+        return None, "ollama not installed"
+
+    _, buffer = cv2.imencode('.png', img_cv)
+    img_bytes = buffer.tobytes()
+
+    try:
+        response = ollama.chat(
+            model=VLM_MODEL,
+            messages=[{
+                'role': 'user',
+                'content': (
+                    'Read the exact Instagram username shown in this image. '
+                    'Return ONLY the username text, nothing else. '
+                    'No quotes, no explanation, no @ symbol.'
+                ),
+                'images': [img_bytes],
+            }],
+        )
+        raw = response['message']['content'].strip()
+        raw = raw.strip('`@"\' \n')
+        username = clean_username(raw)
+        return username, raw
+    except Exception as e:
+        return None, str(e)
+
+
 def clean_username(text):
     if not text:
         return None
@@ -503,9 +563,9 @@ def adjust_confidence(confidence, quality_score):
 
 
 def extract_username_from_image_parallel(args):
-    image_path, image_index, total_images, existing_usernames, use_gpu, diagnostics = args
+    image_path, image_index, total_images, existing_usernames, use_gpu, diagnostics, use_vlm = args
 
-    result = extract_username_from_image(image_path, use_gpu, save_debug=diagnostics)
+    result = extract_username_from_image(image_path, use_gpu, save_debug=diagnostics, use_vlm=use_vlm)
     result['filename'] = image_path.name
     result['index'] = image_index
     result['is_duplicate'] = False
@@ -554,7 +614,7 @@ def extract_username_from_image_parallel(args):
     return result
 
 
-def extract_username_from_image(image_path, use_gpu=True, save_debug=False):
+def extract_username_from_image(image_path, use_gpu=True, save_debug=False, use_vlm=False):
     try:
         img_cv = cv2.imread(str(image_path))
         height, width = img_cv.shape[:2]
@@ -577,19 +637,65 @@ def extract_username_from_image(image_path, use_gpu=True, save_debug=False):
         username, confidence, ocr_diag = ocr_extract_username(cropped, use_gpu)
 
         if not username:
-            return {
-                'username': None,
-                'confidence': 0,
-                'verified': False,
-                'status': 'failed',
-                'quality': 0,
-                'variants_detail': ocr_diag.get('variants', []),
-                'winning_method': None,
-            }
+            if use_vlm:
+                vlm_username, vlm_raw = vlm_extract_username(cropped)
+                if vlm_username:
+                    username = vlm_username
+                    confidence = 80
+                    ocr_diag['vlm_rescue'] = True
+                    ocr_diag['vlm_raw'] = vlm_raw
+                else:
+                    return {
+                        'username': None,
+                        'confidence': 0,
+                        'verified': False,
+                        'status': 'failed',
+                        'quality': 0,
+                        'variants_detail': ocr_diag.get('variants', []),
+                        'winning_method': None,
+                    }
+            else:
+                return {
+                    'username': None,
+                    'confidence': 0,
+                    'verified': False,
+                    'status': 'failed',
+                    'quality': 0,
+                    'variants_detail': ocr_diag.get('variants', []),
+                    'winning_method': None,
+                }
 
         quality = calculate_image_quality(cropped)
         raw_confidence = confidence
         confidence = adjust_confidence(confidence, quality)
+
+        vlm_used = False
+        if use_vlm and not ocr_diag.get('vlm_rescue'):
+            vlm_username, vlm_raw = vlm_extract_username(cropped)
+            ocr_diag['vlm_raw'] = vlm_raw
+            if vlm_username:
+                vlm_used = True
+                if vlm_username == username:
+                    confidence = max(confidence, 90)
+                    ocr_diag['vlm_agreed'] = True
+                else:
+                    dist = levenshtein_distance(vlm_username, username)
+                    if dist <= 2:
+                        if len(vlm_username) > len(username):
+                            ocr_diag['vlm_override'] = True
+                            ocr_diag['vlm_override_from'] = username
+                            username = vlm_username
+                            confidence = max(confidence, 85)
+                        else:
+                            ocr_diag['vlm_deferred'] = True
+                            confidence = max(confidence, 85)
+                    else:
+                        ocr_diag['vlm_override'] = True
+                        ocr_diag['vlm_override_from'] = username
+                        username = vlm_username
+                        confidence = 85
+            else:
+                ocr_diag['vlm_failed'] = True
 
         if confidence >= 90:
             status = 'verified'
@@ -607,6 +713,7 @@ def extract_username_from_image(image_path, use_gpu=True, save_debug=False):
             'raw_confidence': raw_confidence,
             'variants_detail': ocr_diag.get('variants', []),
             'winning_method': ocr_diag.get('winning_method'),
+            'vlm_used': vlm_used,
         }
 
     except Exception as e:
@@ -832,7 +939,7 @@ def main():
     print("Instagram Username Extractor - Universal GPU/CPU Acceleration")
     print("="*70 + "\n")
     
-    input_dir, diagnostics = parse_arguments()
+    input_dir, diagnostics, use_vlm = parse_arguments()
 
     if not input_dir.exists():
         print(f"❌ Error: Directory not found: {input_dir}")
@@ -844,7 +951,21 @@ def main():
     
     print(f"   Device: {hardware_info['device_name']}")
     print(f"   GPU: {'✅ ' + hardware_info['gpu_type'] if hardware_info['gpu_available'] else '❌ Not available'}")
-    print(f"   Workers: {hardware_info['optimal_workers']} parallel processes")
+
+    if use_vlm:
+        vlm_ok, vlm_msg = check_ollama_available()
+        if vlm_ok:
+            hardware_info['optimal_workers'] = min(2, hardware_info['optimal_workers'])
+            print(f"   Workers: {hardware_info['optimal_workers']} parallel processes")
+            print(f"   VLM: ✅ {vlm_msg} (dual-OCR consensus on every image)")
+        else:
+            print(f"   Workers: {hardware_info['optimal_workers']} parallel processes")
+            print(f"   VLM: ❌ {vlm_msg}")
+            print(f"   Falling back to EasyOCR-only mode.")
+            use_vlm = False
+    else:
+        print(f"   Workers: {hardware_info['optimal_workers']} parallel processes")
+
     print()
     
     print(f"📁 Scanning directory: {input_dir}\n")
@@ -865,7 +986,7 @@ def main():
     
     use_gpu = hardware_info['gpu_available']
     args_list = [
-        (path, idx, len(image_paths), existing_usernames, use_gpu, diagnostics)
+        (path, idx, len(image_paths), existing_usernames, use_gpu, diagnostics, use_vlm)
         for idx, path in enumerate(image_paths, 1)
     ]
     

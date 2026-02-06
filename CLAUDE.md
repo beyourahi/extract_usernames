@@ -20,6 +20,12 @@ python3 extract_usernames.py /path/to/images
 
 # With diagnostic output (debug images + JSON)
 python3 extract_usernames.py my_folder --diagnostics
+
+# With VLM second opinion (requires Ollama + qwen2.5vl model)
+python3 extract_usernames.py my_folder --vlm
+
+# Both flags
+python3 extract_usernames.py my_folder --vlm --diagnostics
 ```
 
 No test suite or build system exists. The project is a single script (`extract_usernames.py`).
@@ -28,9 +34,14 @@ No test suite or build system exists. The project is a single script (`extract_u
 
 ```bash
 pip install easyocr torch torchvision opencv-python
+
+# Optional: for --vlm mode
+brew install ollama          # macOS (or see https://ollama.com for other platforms)
+ollama pull qwen2.5vl:3b    # downloads ~3.2GB model
+pip install ollama           # Python client
 ```
 
-EasyOCR downloads ~50MB of models on first run (cached locally).
+EasyOCR downloads ~50MB of models on first run (cached locally). Ollama must be running (`ollama serve`) before using `--vlm`.
 
 ## Architecture
 
@@ -45,11 +56,12 @@ Everything lives in `extract_usernames.py`. The processing pipeline:
 4. **Multi-pass OCR with weighted voting** (`ocr_extract_username`) — EasyOCR reader (singleton via `get_ocr_reader`) runs on all 3 preprocessing variants. Aggressive variant is weighted 2x in voting (empirically most accurate). Consensus requires weight >= 3 (aggressive + one other). Falls back to highest-confidence single result. Also tries concatenating adjacent text segments (sorted by x-coordinate) to recover usernames split at underscores.
 5. **Username validation** (`clean_username`) — enforces Instagram rules: 1-30 chars, alphanumeric/dots/underscores, must start alphanumeric, can't end with period. Preserves trailing underscores (valid on Instagram).
 6. **Image quality scoring** (`calculate_image_quality`, `adjust_confidence`) — measures sharpness (Laplacian variance), contrast (std deviation), and brightness consistency. Only penalizes very low quality (<0.5); no boost for high quality (prevents inflating borderline results).
-7. **Confidence-only categorization** — verified HIGH (>=90%), verified MED (>=80%), review (<80%), failed (no extraction). No HTTP verification (Instagram requires auth for all profile requests since mid-2024).
-8. **Near-duplicate detection** (`find_similar_existing`) — Levenshtein distance check against existing usernames. Near-duplicates (edit distance <=2) are flagged for review rather than auto-verified.
-9. **Within-batch deduplication** — `append_to_files()` tracks a `seen` set to prevent the same username from being written twice in a single run.
-10. **Parallel processing** — `multiprocessing.Pool` distributes images across workers. Note: the global `_ocr_reader` singleton does NOT carry across processes; each worker initializes its own reader.
-11. **Output** — appends to markdown files in `~/Desktop/leads/`: `verified_usernames.md`, `needs_review.md`, `extraction_report.md`. Tracks existing usernames to skip duplicates and near-duplicates across runs.
+7. **VLM second opinion** (opt-in via `--vlm`) — after EasyOCR produces a result, sends the cropped image to Qwen2.5-VL via Ollama for an independent read. Consensus logic: if both agree, confidence is boosted to >=90%. If they disagree by <=2 edit distance, the longer result is preferred (preserves underscores/dots that one engine may drop). If they disagree by >2 edits, VLM result is preferred at 85% confidence. If EasyOCR fails entirely, VLM acts as a rescue at 80% confidence. Gracefully degrades to EasyOCR-only if Ollama is unavailable.
+8. **Confidence-only categorization** — verified HIGH (>=90%), verified MED (>=80%), review (<80%), failed (no extraction). No HTTP verification (Instagram requires auth for all profile requests since mid-2024).
+9. **Near-duplicate detection** (`find_similar_existing`) — Levenshtein distance check against existing usernames. Near-duplicates (edit distance <=2) are flagged for review rather than auto-verified.
+10. **Within-batch deduplication** — `append_to_files()` tracks a `seen` set to prevent the same username from being written twice in a single run.
+11. **Parallel processing** — `multiprocessing.Pool` distributes images across workers. Note: the global `_ocr_reader` singleton does NOT carry across processes; each worker initializes its own reader.
+12. **Output** — appends to markdown files in `~/Desktop/leads/`: `verified_usernames.md`, `needs_review.md`, `extraction_report.md`. Tracks existing usernames to skip duplicates and near-duplicates across runs.
 
 ## Key Constants
 
@@ -106,3 +118,7 @@ perf:     performance improvements
 7. **Worker count capped at 4** — `optimal_workers` is `min(4, max(1, cpu_count() - 1))`. This is intentional to prevent system freezing. Do not increase this cap without understanding memory implications (each worker loads its own EasyOCR model).
 
 8. **Debug directory behavior** — `~/Desktop/ocr_debug/` is created at module load time. Without `--diagnostics`, it is deleted at the end of a successful run via `shutil.rmtree()`. With `--diagnostics`, it is preserved along with a JSON dump. Do not store anything important there.
+
+9. **VLM mode requires Ollama running** — `--vlm` depends on a local Ollama server (`localhost:11434`). If Ollama is not running or the model isn't pulled, the script warns and falls back to EasyOCR-only. VLM calls are serialized through a single Ollama instance (one image at a time), so it is the processing bottleneck in `--vlm` mode. Workers are reduced to 2 when `--vlm` is enabled to leave memory headroom for the model (~3.2GB for `qwen2.5vl:3b`).
+
+10. **VLM consensus heuristic is tuned for underscore/dot preservation** — The "prefer longer result when edit distance <=2" rule exists specifically because EasyOCR tends to drop underscores and dots while VLMs preserve them. Do not change this heuristic without regression testing against `ground_truth.csv`.
