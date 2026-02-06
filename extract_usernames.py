@@ -42,7 +42,7 @@ def setup_directories(output_dir=None):
     REVIEW_FILE = OUTPUT_DIR / "needs_review.md"
     REPORT_FILE = OUTPUT_DIR / "extraction_report.md"
 
-VLM_MODEL = 'qwen2.5vl:3b'
+VLM_MODEL = 'qwen3-vl:8b-instruct-q4_K_M'
 
 
 def detect_hardware():
@@ -455,7 +455,7 @@ def check_ollama_available():
 
 
 def vlm_extract_username(img_cv):
-    """Extract username from cropped image using Qwen2.5-VL via Ollama.
+    """Extract username from cropped image using qwen3-vl:8b-instruct-q4_K_M via Ollama.
 
     Sends the raw cropped image (no preprocessing) to the VLM, which reads
     text holistically — better at preserving underscores and dots that

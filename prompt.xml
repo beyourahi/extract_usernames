@@ -471,3 +471,5 @@
     <note priority="medium">If Ollama API changes or qwen2.5vl:3b is deprecated, fallback is EasyOCR-only mode (already implemented with --no-vlm)</note>
   </notes>
 </task_specification>
+
+If Ollama isn't available, the script should pause and ask the user if it should fall back to EasyOCR-only or install and setup ollama and mention the problems clearly.
