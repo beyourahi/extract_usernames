@@ -16,13 +16,14 @@ def run_initial_setup() -> Dict[str, Any]:
     
     # Basic settings
     click.secho("📁 Directory Settings", fg="yellow", bold=True)
+    click.echo("\n💡 Tip: You can use any directory name - it doesn't have to be 'screenshots'")
     config['input_dir'] = click.prompt(
-        "Default screenshots directory",
+        "Screenshots directory (can be any folder name)",
         type=str,
-        default=str(Path.home() / "Desktop" / "instagram_screenshots")
+        default=str(Path.home() / "Desktop" / "screenshots")
     )
     config['output_dir'] = click.prompt(
-        "Default output directory",
+        "Output directory",
         type=str,
         default=str(Path.home() / "Desktop" / "leads")
     )
@@ -154,13 +155,14 @@ def prompt_reconfigure_option() -> str:
 def reconfigure_directories(config: Dict[str, Any]) -> Dict[str, Any]:
     """Reconfigure directory settings."""
     click.secho("\n📁 Directory Settings", fg="yellow", bold=True)
+    click.echo("\n💡 Tip: You can specify any directory path - custom names are fully supported")
     config['input_dir'] = click.prompt(
-        "Default screenshots directory",
+        "Screenshots directory (any folder name or path)",
         type=str,
-        default=config.get('input_dir', str(Path.home() / "Desktop" / "instagram_screenshots"))
+        default=config.get('input_dir', str(Path.home() / "Desktop" / "screenshots"))
     )
     config['output_dir'] = click.prompt(
-        "Default output directory",
+        "Output directory",
         type=str,
         default=config.get('output_dir', str(Path.home() / "Desktop" / "leads"))
     )
