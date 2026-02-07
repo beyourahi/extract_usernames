@@ -1,6 +1,10 @@
 # Instagram Username Extractor - Python Dependencies
 # Tested on Python 3.9+, recommended: Python 3.11+
 
+# ========================================
+# CORE OCR & IMAGE PROCESSING
+# ========================================
+
 # Primary OCR engine
 easyocr>=1.7.0
 
@@ -18,3 +22,23 @@ torchvision>=0.15.0
 # VLM integration (optional - graceful degradation if Ollama not installed)
 # Can run with --no-vlm flag without this
 ollama>=0.1.0
+
+
+# ========================================
+# NOTION INTEGRATION & INSTAGRAM VALIDATION
+# ========================================
+
+# Official Notion Python SDK for database operations
+notion-client>=2.2.1
+
+# HTTP requests for Instagram profile validation
+requests>=2.31.0
+
+# Environment variable management (.env file)
+python-dotenv>=1.0.0
+
+# Retry logic with exponential backoff for robust API calls
+tenacity>=8.2.3
+
+# HTTP library (requests dependency, explicit for compatibility)
+urllib3>=2.0.0
