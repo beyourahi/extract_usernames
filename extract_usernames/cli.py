@@ -64,6 +64,9 @@ def resolve_directory_path(path_str: str) -> Path:
 @click.option('--reset-config', is_flag=True, help='Reset configuration to defaults')
 @click.option('--notion-sync', is_flag=True, help='Sync to Notion after extraction')
 @click.option('--no-notion-sync', is_flag=True, help='Skip Notion sync')
+@click.option('--merge-duplicates', is_flag=True, help='Merge duplicate entries in Notion after sync')
+@click.option('--keep-strategy', type=click.Choice(['oldest', 'newest']), default='oldest', help='Which duplicate to keep (default: oldest)')
+@click.option('--dry-run-merge', is_flag=True, help='Preview merge without making changes')
 @click.version_option(version='2.0.0', prog_name='Instagram Username Extractor')
 def main(
     input_path: Optional[str],
@@ -77,14 +80,18 @@ def main(
     reset_config: bool,
     notion_sync: bool,
     no_notion_sync: bool,
+    merge_duplicates: bool,
+    keep_strategy: str,
+    dry_run_merge: bool,
 ):
     """Extract Instagram usernames from screenshots with VLM+OCR dual-engine validation.
     
     \b
     Quick Start:
-      extract-usernames                    # Use saved config, prompt for input
-      extract-usernames my_screenshots     # Extract from specific folder
-      extract-usernames --reconfigure      # Update settings
+      extract-usernames                           # Use saved config, prompt for input
+      extract-usernames my_screenshots            # Extract from specific folder
+      extract-usernames --reconfigure             # Update settings
+      extract-usernames --notion-sync --merge-duplicates  # Sync and merge duplicates
     
     \b
     Examples:
@@ -92,6 +99,8 @@ def main(
       extract-usernames --no-vlm --output ./results
       extract-usernames --vlm-model minicpm-v:8b-2.6-q8_0
       extract-usernames --diagnostics --notion-sync
+      extract-usernames --merge-duplicates --keep-strategy newest
+      extract-usernames --dry-run-merge  # Preview merge without changes
     """
     config_manager = ConfigManager()
     
@@ -145,7 +154,7 @@ def main(
             return
     
     # Show current config and confirm
-    if not input_path and not any([output, no_vlm, vlm_model, diagnostics, notion_sync, no_notion_sync]):
+    if not input_path and not any([output, no_vlm, vlm_model, diagnostics, notion_sync, no_notion_sync, merge_duplicates]):
         if not prompts.confirm_config(config):
             if click.confirm("Reconfigure settings?", default=True):
                 click.echo("\nRun: extract-usernames --reconfigure")
@@ -225,11 +234,26 @@ def main(
                 database_id=config['notion']['database_id'],
                 skip_validation=config['notion']['skip_validation'],
                 delay=config['notion']['validation_delay'],
+                merge_duplicates=merge_duplicates,
+                keep_strategy=keep_strategy,
+                dry_run_merge=dry_run_merge,
             )
             
             click.secho(f"\n✅ Notion sync complete!", fg="green", bold=True)
             click.echo(f"Added to Notion: {notion_results.get('added_count', 0)}")
             click.echo(f"Duplicates skipped: {notion_results.get('duplicate_count', 0)}")
+            
+            # Show merge stats if merge was performed
+            if notion_results.get('merge_stats'):
+                merge_stats = notion_results['merge_stats']
+                click.echo("\n" + "="* 70)
+                click.secho("🔄 Duplicate Merge Results", fg="cyan", bold=True)
+                click.echo("=" * 70)
+                click.echo(f"Duplicate groups found: {merge_stats['duplicate_groups']}")
+                click.echo(f"Entries archived: {merge_stats['archived']}")
+                click.echo(f"Entries kept: {merge_stats['kept']}")
+                if merge_stats['errors'] > 0:
+                    click.echo(f"Errors: {merge_stats['errors']}")
         
     except KeyboardInterrupt:
         click.echo("\n\n⚠️  Extraction cancelled by user.")
