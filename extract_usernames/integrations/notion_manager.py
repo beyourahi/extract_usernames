@@ -28,6 +28,7 @@ class NotionDatabaseManager:
         self._last_request_time = 0
         self._existing_usernames_cache: Optional[Set[str]] = None
         self._data_source_id: Optional[str] = None
+        self._property_names: Optional[Dict[str, str]] = None
         self._verify_connection()
     
     def _clean_database_id(self, db_id: str) -> str:
@@ -93,6 +94,59 @@ class NotionDatabaseManager:
             self._data_source_id = self.database_id
             return self._data_source_id
     
+    def _detect_property_names(self) -> Dict[str, str]:
+        """Auto-detect property names from database schema.
+        
+        Returns:
+            Dictionary mapping logical names to actual property names:
+            {'title': 'Brand Name', 'url': 'Social Media Account', 'status': 'Status'}
+        """
+        if self._property_names:
+            return self._property_names
+        
+        try:
+            self._enforce_rate_limit()
+            db = self.client.databases.retrieve(database_id=self.database_id)
+            properties = db.get('properties', {})
+            
+            prop_map = {}
+            
+            # Find title property (there's always exactly one)
+            for prop_name, prop_data in properties.items():
+                prop_type = prop_data.get('type')
+                if prop_type == 'title':
+                    prop_map['title'] = prop_name
+                elif prop_type == 'url' and 'social' in prop_name.lower():
+                    prop_map['url'] = prop_name
+                elif prop_type == 'status':
+                    prop_map['status'] = prop_name
+            
+            # Fallback: search by common names if not found
+            if 'url' not in prop_map:
+                for prop_name in properties.keys():
+                    if properties[prop_name].get('type') == 'url':
+                        prop_map['url'] = prop_name
+                        break
+            
+            if 'status' not in prop_map:
+                for prop_name in properties.keys():
+                    if properties[prop_name].get('type') == 'status':
+                        prop_map['status'] = prop_name
+                        break
+            
+            self._property_names = prop_map
+            self.logger.info(f"✅ Detected properties: {prop_map}")
+            return prop_map
+            
+        except Exception as e:
+            self.logger.warning(f"Could not detect property names: {e}. Using defaults.")
+            # Use default property names as fallback
+            return {
+                'title': 'Brand Name',
+                'url': 'Social Media Account',
+                'status': 'Status'
+            }
+    
     def _verify_connection(self):
         """Verify connection to Notion database with helpful error messages."""
         try:
@@ -101,8 +155,9 @@ class NotionDatabaseManager:
             db_title = db.get("title", [{}])[0].get("plain_text", "Unknown")
             self.logger.info(f"✅ Connected to Notion database: {db_title}")
             
-            # Pre-fetch data source ID
+            # Pre-fetch data source ID and property names
             self._get_data_source_id()
+            self._detect_property_names()
         except APIResponseError as e:
             error_code = getattr(e, 'code', 'unknown')
             error_msg = str(e)
@@ -177,6 +232,8 @@ class NotionDatabaseManager:
         has_more = True
         start_cursor = None
         data_source_id = self._get_data_source_id()
+        prop_names = self._detect_property_names()
+        title_prop = prop_names.get('title', 'Brand Name')
         
         while has_more:
             self._enforce_rate_limit()
@@ -194,7 +251,7 @@ class NotionDatabaseManager:
             
             for page in response.get("results", []):
                 props = page.get("properties", {})
-                brand_name_prop = props.get("Brand Name", {})
+                brand_name_prop = props.get(title_prop, {})
                 title_list = brand_name_prop.get("title", [])
                 if title_list:
                     username = title_list[0].get("plain_text", "").strip().lower()
@@ -222,27 +279,62 @@ class NotionDatabaseManager:
         
         try:
             self._enforce_rate_limit()
+            
+            # Get actual property names from schema
+            prop_names = self._detect_property_names()
+            title_prop = prop_names.get('title', 'Brand Name')
+            url_prop = prop_names.get('url', 'Social Media Account')
+            status_prop = prop_names.get('status', 'Status')
+            
+            # Build properties with actual names
             properties = {
-                "Brand Name": {"title": [{"text": {"content": username}}]},
-                "Social Media Account": {"url": instagram_url},
-                "Status": {"status": {"name": status}}
+                title_prop: {
+                    "title": [
+                        {
+                            "text": {
+                                "content": username
+                            }
+                        }
+                    ]
+                },
+                url_prop: {
+                    "url": instagram_url
+                }
             }
+            
+            # Add status if property exists
+            if status_prop:
+                properties[status_prop] = {
+                    "status": {
+                        "name": status
+                    }
+                }
+            
+            # Use data_source_id as parent (new API requirement)
+            data_source_id = self._get_data_source_id()
+            
             page = self.client.pages.create(
-                parent={"database_id": self.database_id},
+                parent={"data_source_id": data_source_id},
                 properties=properties
             )
             result['success'] = True
             result['page_id'] = page.get("id")
             result['url'] = page.get("url")
             
+            self.logger.info(f"✅ Created page for @{username}")
+            
             # Update cache
             if self._existing_usernames_cache is not None:
                 self._existing_usernames_cache.add(username.lower())
         
         except APIResponseError as e:
-            result['error'] = f"Notion API error: {e}"
+            error_msg = str(e)
+            self.logger.error(f"❌ Notion API error for @{username}: {error_msg}")
+            result['error'] = f"Notion API error: {error_msg}"
         except Exception as e:
-            result['error'] = f"Unexpected error: {str(e)}"
+            error_msg = str(e)
+            self.logger.error(f"❌ Unexpected error for @{username}: {error_msg}")
+            result['error'] = f"Unexpected error: {error_msg}"
         
         return result
     
