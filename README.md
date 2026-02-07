@@ -1,302 +1,172 @@
 # Instagram Username Extractor
 
-Extract Instagram usernames from screenshots using **VLM-primary dual-engine architecture** with intelligent consensus validation.
+**Fast, accurate Instagram username extraction from screenshots using dual-engine OCR (VLM + EasyOCR).**
 
-## ✨ Features
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-- **VLM-Primary Architecture** - Vision Language Model as primary extraction engine
-- **Intelligent Consensus** - 5-strategy cross-validation with EasyOCR
-- **Enhanced Accuracy** - 95%+ confidence on high-quality extractions
-- **Dot Preservation** - Superior handling of dots and underscores
-- **GPU Accelerated** - NVIDIA, AMD, Apple Silicon, or CPU
-- **Smart Deduplication** - Cross-run duplicate detection
-- **Confidence Tiers** - HIGH (≥95%), MED (≥85%), REVIEW (<85%)
-- **Cross-Platform** - Windows, macOS, Linux
+---
 
-## 📋 Requirements
-
-- Python 3.9+
-- 8GB RAM (16GB recommended for VLM)
-- 4GB free disk space
-- Ollama + GLM-OCR (installed by setup scripts)
-
-## 🚀 Installation
-
-**Windows:**
-```powershell
-.\setup.ps1
-```
-
-**macOS:**
-```bash
-chmod +x setup.sh
-./setup.sh
-```
-
-**Linux:**
-```bash
-chmod +x setup.sh
-./setup.sh
-```
-
-The setup script automatically installs Python dependencies (~2-3GB), Ollama, and the GLM-OCR model (~2.2GB).
-
-**Verify installation:**
-```bash
-python extract_usernames.py --help
-```
-
-## ⚡ Quick Start
-
-1. Place Instagram screenshots in a folder on your Desktop (e.g., `my_screenshots`)
-
-2. Run:
-   ```bash
-   python extract_usernames.py my_screenshots
-   ```
-
-3. Check results in `~/Desktop/leads/`:
-   - `verified_usernames.md` - Ready to use (≥85% confidence)
-   - `needs_review.md` - Manual verification needed
-   - `extraction_report.md` - Processing metrics + engine performance
-
-## 📖 Usage
+## Quick Start
 
 ```bash
-# Basic usage (VLM-primary mode, default)
-python extract_usernames.py my_screenshots
+# 1. Clone and setup
+git clone https://github.com/beyourahi/extract_usernames.git
+cd extract_usernames
+./setup.sh  # macOS/Linux  or  .\setup.ps1  # Windows
 
-# Absolute path
-python extract_usernames.py /path/to/screenshots
+# 2. Extract usernames (interactive)
+extract-usernames
 
-# Custom output directory
-python extract_usernames.py images --output /path/to/results
-
-# EasyOCR-only legacy mode (faster, lower accuracy)
-python extract_usernames.py images --no-vlm
-
-# Alternative VLM model (for better accuracy on degraded images)
-python extract_usernames.py images --vlm-model minicpm-v:8b-2.6-q8_0
-
-# Enable diagnostics (debug images + JSON + consensus decisions)
-python extract_usernames.py images --diagnostics
+# 3. Or use command flags
+extract-usernames --input ~/Desktop/screenshots
 ```
 
-**Supported formats:** JPG, PNG, WEBP, BMP, TIFF
+**First-time setup wizard** saves your preferences for future runs. Reconfigure anytime with:
+```bash
+extract-usernames --reconfigure
+```
 
-## 📤 Notion Integration (Optional)
+---
 
-After extracting usernames, automatically validate and sync them to your Notion "Client Hunt" database.
+## Features
+
+- **🎯 VLM-Primary Mode** - Uses GLM-OCR (vision language model) for maximum accuracy
+- **🔄 Dual-Engine Fallback** - Falls back to EasyOCR when VLM unavailable
+- **⚡ GPU Acceleration** - Supports NVIDIA CUDA, AMD ROCm, Apple Metal
+- **🧹 Smart Deduplication** - Detects exact and near-duplicate usernames
+- **📤 Notion Integration** - Sync validated leads to Notion database
+- **💾 Persistent Config** - Interactive setup saves preferences as JSON
+
+---
+
+## Architecture
+
+```
+extract_usernames/
+├── cli.py              # Click CLI with persistent config
+├── config.py           # JSON configuration manager
+├── prompts.py          # Interactive questionnaire
+├── main.py             # Extraction pipeline wrapper
+├── notion_sync.py      # Notion synchronization
+├── instagram_validator.py  # Username validation
+└── notion_manager.py   # Notion API client
+```
+
+**Configuration stored at:** `~/.config/extract-usernames/config.json`
+
+---
+
+## Usage Examples
+
+### Interactive Mode (Recommended)
+```bash
+# First run: complete setup wizard
+extract-usernames
+
+# Subsequent runs: uses saved config
+extract-usernames
+
+# Change specific settings
+extract-usernames --reconfigure directories
+extract-usernames --reconfigure extraction
+extract-usernames --reconfigure notion
+extract-usernames --reconfigure all
+```
+
+### Command-Line Flags (Override Config)
+```bash
+# Specify directories
+extract-usernames --input ~/Desktop/leads_jan --output ~/results
+
+# Extraction options
+extract-usernames --vlm-model minicpm-v:8b --diagnostics
+
+# Notion sync
+extract-usernames --notion-token secret_xxx --notion-db xxx
+
+# Legacy mode
+extract-usernames --no-vlm  # EasyOCR-only
+```
+
+---
+
+## Notion Integration
 
 ### Setup
-
 1. Create a Notion integration at [notion.so/my-integrations](https://www.notion.so/my-integrations)
-2. Share your "Client Hunt" database with the integration
-3. Copy the integration token and database ID
-4. Create `.env` file in the project root:
+2. Share your database with the integration
+3. Run `extract-usernames --reconfigure notion` or provide flags:
    ```bash
-   NOTION_TOKEN=your_integration_token_here
-   NOTION_DATABASE_ID=your_database_id_here
+   extract-usernames --notion-token secret_xxx --notion-db xxx
    ```
 
-### Usage
+### Database Schema
+Your Notion database should have:
+- **Brand Name** (Title) - Instagram username
+- **Social Media Account** (URL) - Profile link  
+- **Status** (Status) - "Didn't Approach", "Approached", etc.
+- **Business Type** (Multi-select) - Optional
+- **Payment System** (Status) - Optional
+- **Amount** (Number) - Optional
 
+---
+
+## Output Files
+
+```
+~/Desktop/leads/  (or custom output directory)
+├── verified_usernames.md     # High-confidence extractions
+├── needs_review.md           # Low-confidence or duplicates
+└── extraction_report.md      # Performance metrics
+```
+
+---
+
+## Requirements
+
+- **Python 3.9+**
+- **Ollama + GLM-OCR** (for VLM mode, recommended)
+- **GPU** (optional but significantly faster)
+
+**Install Ollama:**
 ```bash
-# After running extract_usernames.py, sync leads to Notion
-python leads_to_notion.py
+# macOS
+brew install ollama
+ollama pull glm-ocr:bf16
 
-# Dry run to preview what will be added (no actual changes)
-python leads_to_notion.py --dry-run
+# Linux
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull glm-ocr:bf16
 
-# Skip Instagram validation, trust extraction results
-python leads_to_notion.py --skip-validation
-
-# Custom Instagram request delay (default: 2 seconds)
-python leads_to_notion.py --delay 3.0
-
-# Verbose output with debug information
-python leads_to_notion.py --verbose
-```
-
-### Features
-
-- **HTTP Validation**: Verifies Instagram accounts exist (no API needed)
-- **Duplicate Detection**: Checks both current batch and existing Notion entries
-- **Safe Operations**: Only adds new entries, never modifies existing data
-- **Robust Error Handling**: Continues on failures with detailed logging
-- **Rate Limiting**: Respects Instagram (2s) and Notion (0.35s) rate limits
-- **Comprehensive Reporting**: JSON logs + Markdown summary
-
-### Output
-
-Results are saved to:
-- `validation_results/validation_results_{timestamp}.json` - Detailed validation log
-- `~/Desktop/leads/notion_sync_report.md` - Human-readable summary
-- Console output with real-time progress
-
-### CLI Options
-
-```
---input FILE          Input file with usernames (default: ~/Desktop/leads/verified_usernames.md)
---output DIR          Results directory (default: ./validation_results)
---skip-validation     Skip Instagram validation, only add to Notion
---skip-notion         Only validate, don't sync to Notion
---delay SECONDS       Delay between Instagram requests (default: 2.0)
---dry-run             Preview changes without modifying Notion
---force-add           Skip duplicate checks (use with caution)
---verbose             Enable debug logging
-```
-
-### Dependencies
-
-Install Notion integration dependencies:
-```bash
-pip install notion-client requests python-dotenv tenacity
-```
-
-Or reinstall all dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-**For complete setup instructions, see [NOTION_SETUP.md](NOTION_SETUP.md)**
-
-## 🔧 How It Works
-
-### VLM-Primary Dual-Engine Architecture (Default)
-
-1. **Crop** - Extracts username region (165px from top, 90px height)
-2. **VLM Primary Extraction** - GLM-OCR reads raw image holistically (preserves dots/underscores)
-3. **EasyOCR Cross-Validation** - 3 preprocessing variants (balanced, aggressive, minimal) with weighted voting
-4. **Intelligent Consensus** - 5 reconciliation strategies:
-   - **Exact Agreement** - Both engines match → confidence +5% (capped at 95%)
-   - **Dot Reconciliation** - Differ only by dots/underscores → prefer VLM version
-   - **Confusion Correction** - Known OCR patterns (tf→ff, rn→m) → prefer corrected
-   - **Minor Edit Distance** (≤2) - Prefer longer version (preserves dropped chars)
-   - **Significant Disagreement** (>2) - Flag for review, use higher confidence engine
-5. **Categorize** - Routes to verified (≥85%) or review (<85%)
-
-### EasyOCR-Only Legacy Mode (`--no-vlm`)
-
-1. **Crop** - Same username region extraction
-2. **Multi-Pass OCR** - 3 preprocessing variants with weighted voting
-3. **Cross-Variant Corrections** - Dot reconciliation, confusion pattern fixes
-4. **Categorize** - Same confidence tiers (95%/85%)
-
-**Note:** The script expects Instagram's standard mobile screenshot layout. Use `--diagnostics` if extractions fail.
-
-## 📊 Performance
-
-**VLM-Primary Mode (Default):**
-- Speed: ~0.5-2 images/second
-- Accuracy: 95%+ on clean screenshots
-- Best for: Maximum accuracy, dot/underscore preservation
-- Workers: 2 (memory constraint)
-
-**EasyOCR-Only Mode (`--no-vlm`):**
-- Speed: ~5-15 images/second
-- Accuracy: 85%+ on clean screenshots
-- Best for: Speed-critical workflows, bulk processing
-- Workers: 6 (parallel processing)
-
-## 🛠️ Troubleshooting
-
-**Python not found**
-- Try `python3` instead of `python`
-- Reinstall from [python.org](https://www.python.org/downloads/)
-
-**Dependencies fail to install**
-- Re-run setup script
-- Try: `pip install --user -r requirements.txt`
-
-**Ollama not running**
-- Start: `ollama serve`
-- Or use: `--no-vlm` flag for EasyOCR-only mode
-
-**Model not found**
-```bash
+# Windows
+# Download from https://ollama.com/download
 ollama pull glm-ocr:bf16
 ```
 
-**Low accuracy**
-- Verify crop region with `--diagnostics`
-- Check consensus decisions in `{image}_consensus.json`
-- Ensure clear, unblurred screenshots
-- Screenshots must use Instagram's standard layout
-- Try alternative VLM model for degraded images
+---
 
-**Slow processing**
-- Check GPU detection in `extraction_report.md`
-- VLM-primary is intentionally slower (0.5-2 img/sec) for accuracy
-- Use `--no-vlm` for 5-10x faster processing
+## Contributing
 
-**Memory issues**
-- VLM mode uses 2 workers (vs 6 for EasyOCR-only)
-- Close other applications
-- Use smaller VLM model (glm-ocr:bf16 is smallest at 2.2GB)
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-## 🔬 VLM Model Alternatives
+---
 
-Default `glm-ocr:bf16` is recommended (lightweight, fast, OCR-optimized). For challenging images:
+## License
 
-**MiniCPM-V 2.6** (~8.5GB) - Best for complex/blurry/watermarked images:
-```bash
-ollama pull minicpm-v:8b-2.6-q8_0
-python extract_usernames.py images --vlm-model minicpm-v:8b-2.6-q8_0
-```
+MIT License - see [LICENSE](LICENSE)
 
-**Qwen2.5-VL-7B** (~6GB) - All-rounder, excellent document understanding:
-```bash
-ollama pull qwen2.5-vl:7b
-python extract_usernames.py images --vlm-model qwen2.5-vl:7b
-```
+---
 
-⚠️ Larger models are slower but provide better accuracy on degraded images.
+## Author
 
-## ❓ FAQ
+**Rahi Khan** - [Dropout Studio](https://dropout.studio)  
+Freelance web developer specializing in SvelteKit and modern web experiences.
 
-**Q: Why is VLM-primary mode slower?**  
-A: VLM processes images holistically (preserves dots/underscores) and runs dual-engine consensus for maximum accuracy. Speed: 0.5-2 img/sec vs 5-15 img/sec EasyOCR-only. Use `--no-vlm` for faster processing.
+---
 
-**Q: Can I process non-Instagram screenshots?**  
-A: Only if usernames appear at 165px from top. Optimized for Instagram's mobile layout.
+## Support
 
-**Q: Does this work offline?**  
-A: Yes, after initial downloads everything runs locally.
-
-**Q: Is GPU required?**  
-A: No, but GPU is 5-10x faster. VLM benefits most from GPU acceleration.
-
-**Q: How accurate is it?**  
-A: VLM-primary: >95% auto-verified on clean screenshots. EasyOCR-only: >85%.
-
-**Q: Privacy?**  
-A: Everything runs locally. No cloud API calls. Ollama runs on localhost.
-
-**Q: Can I process thousands of images?**  
-A: Yes. VLM-primary: ~0.5-2 img/sec. EasyOCR-only: ~5-15 img/sec. Choose based on accuracy vs speed needs.
-
-**Q: What's the consensus validator?**  
-A: When VLM and EasyOCR disagree, 5 strategies reconcile differences:
-1. Exact agreement (highest confidence)
-2. Dot/underscore reconciliation (prefer VLM)
-3. Known OCR confusion corrections (tf→ff, rn→m, etc.)
-4. Minor differences (prefer longer version)
-5. Major disagreements (flag for review)
-
-**Q: When should I use `--no-vlm`?**  
-A: Use EasyOCR-only mode when:
-- Processing thousands of images (speed matters)
-- Memory constraints (<8GB RAM)
-- Ollama/VLM not available
-- Usernames don't contain dots/underscores
-
-## 🤝 Contributing
-
-Contributions welcome! Follow [conventional commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, etc.).
-
-Submit issues: [GitHub Issues](https://github.com/beyourahi/extract_usernames/issues)
-
-## 📄 License
-
-MIT License - See LICENSE file for details.
+- **Issues:** [GitHub Issues](https://github.com/beyourahi/extract_usernames/issues)
+- **Documentation:** [CLAUDE.md](CLAUDE.md) - Detailed technical docs
+- **Contact:** [@beyourahi](https://github.com/beyourahi)
