@@ -13,7 +13,7 @@ class ConfigManager:
     CONFIG_FILE = CONFIG_DIR / "config.json"
     
     DEFAULT_CONFIG = {
-        "input_dir": str(Path.home() / "Desktop" / "instagram_screenshots"),
+        "input_dir": str(Path.home() / "Desktop" / "screenshots"),
         "output_dir": str(Path.home() / "Desktop" / "leads"),
         "vlm_enabled": True,
         "vlm_model": "glm-ocr:bf16",
