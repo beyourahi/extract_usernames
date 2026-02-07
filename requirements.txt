@@ -1,0 +1,20 @@
+# Instagram Username Extractor - Python Dependencies
+# Tested on Python 3.9+, recommended: Python 3.11+
+
+# Primary OCR engine
+easyocr>=1.7.0
+
+# Image preprocessing and manipulation
+opencv-python>=4.8.0,<5.0.0
+
+# Array operations for image processing
+numpy>=1.24.0
+
+# EasyOCR backend and hardware acceleration
+# PyTorch will auto-detect CUDA version and install appropriate binaries
+torch>=2.0.0
+torchvision>=0.15.0
+
+# VLM integration (optional - graceful degradation if Ollama not installed)
+# Can run with --no-vlm flag without this
+ollama>=0.1.0
