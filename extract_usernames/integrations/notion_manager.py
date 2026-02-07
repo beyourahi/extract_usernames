@@ -22,11 +22,34 @@ class NotionDatabaseManager:
     
     def __init__(self, token: str, database_id: str):
         self.client = Client(auth=token)
-        self.database_id = database_id.replace("-", "")
+        # Clean database ID - remove dashes and any URL parts
+        self.database_id = self._clean_database_id(database_id)
         self.logger = logging.getLogger(__name__)
         self._last_request_time = 0
         self._existing_usernames_cache: Optional[Set[str]] = None
         self._verify_connection()
+    
+    def _clean_database_id(self, db_id: str) -> str:
+        """Clean and extract database ID from various formats.
+        
+        Supports:
+        - Raw ID: 300472d4ce5181aa83f2000b8ae958d2
+        - Dashed ID: 300472d4-ce51-81aa-83f2-000b8ae958d2
+        - Full URL: https://notion.so/300472d4ce5181aa83f2000b8ae958d2
+        - URL with dashes: https://notion.so/300472d4-ce51-81aa-83f2-000b8ae958d2?v=...
+        """
+        # Remove any URL prefix
+        if 'notion.so/' in db_id:
+            db_id = db_id.split('notion.so/')[-1]
+        
+        # Remove query parameters
+        if '?' in db_id:
+            db_id = db_id.split('?')[0]
+        
+        # Remove dashes
+        db_id = db_id.replace('-', '')
+        
+        return db_id
     
     def _enforce_rate_limit(self):
         if self._last_request_time > 0:
@@ -36,15 +59,79 @@ class NotionDatabaseManager:
         self._last_request_time = time.time()
     
     def _verify_connection(self):
+        """Verify connection to Notion database with helpful error messages."""
         try:
             self._enforce_rate_limit()
             db = self.client.databases.retrieve(database_id=self.database_id)
             db_title = db.get("title", [{}])[0].get("plain_text", "Unknown")
-            self.logger.info(f"Connected to database: {db_title}")
+            self.logger.info(f"✅ Connected to Notion database: {db_title}")
         except APIResponseError as e:
-            raise Exception(f"Could not connect to Notion database: {e}")
+            error_code = getattr(e, 'code', 'unknown')
+            error_msg = str(e)
+            
+            # Build helpful error message
+            help_msg = self._build_connection_error_help(error_code, error_msg)
+            raise Exception(help_msg)
+    
+    def _build_connection_error_help(self, error_code: str, error_msg: str) -> str:
+        """Build a helpful error message with troubleshooting steps."""
+        base_msg = f"\n\n❌ Could not connect to Notion database\n"
+        base_msg += f"Error: {error_msg}\n\n"
+        
+        base_msg += "🔧 Troubleshooting Steps:\n\n"
+        
+        if "object_not_found" in error_msg.lower() or "could not find database" in error_msg.lower():
+            base_msg += "1. ✓ Make sure the database is SHARED with your integration:\n"
+            base_msg += "   • Open your Notion database\n"
+            base_msg += "   • Click '...' (three dots) in the top right\n"
+            base_msg += "   • Select 'Add connections'\n"
+            base_msg += "   • Find and add your integration\n\n"
+            
+            base_msg += "2. ✓ Verify the database ID is correct:\n"
+            base_msg += f"   • Current ID: {self.database_id}\n"
+            base_msg += "   • Get it from the database URL: https://notion.so/YOUR-ID-HERE?v=...\n"
+            base_msg += "   • The ID is the part between notion.so/ and ?v=\n\n"
+            
+        elif "unauthorized" in error_msg.lower():
+            base_msg += "1. ✓ Check your integration token:\n"
+            base_msg += "   • Go to https://www.notion.so/my-integrations\n"
+            base_msg += "   • Make sure your integration is active\n"
+            base_msg += "   • Copy the 'Internal Integration Token'\n\n"
+            
+            base_msg += "2. ✓ Update your configuration:\n"
+            base_msg += "   • Run: extract-usernames --reconfigure\n"
+            base_msg += "   • Choose 'notion' and enter the correct token\n\n"
+        
+        else:
+            base_msg += "1. ✓ Verify database sharing (most common issue):\n"
+            base_msg += "   • Open the database in Notion\n"
+            base_msg += "   • Click 'Share' button\n"
+            base_msg += "   • Add your integration to the database\n\n"
+            
+            base_msg += "2. ✓ Check integration token:\n"
+            base_msg += "   • Visit: https://www.notion.so/my-integrations\n"
+            base_msg += "   • Verify the token is correct\n\n"
+            
+            base_msg += "3. ✓ Verify database ID:\n"
+            base_msg += f"   • Current: {self.database_id}\n"
+            base_msg += "   • Get from URL: https://notion.so/[DATABASE-ID]?v=...\n\n"
+        
+        base_msg += "📖 Full Setup Guide:\n"
+        base_msg += "   https://github.com/beyourahi/extract_usernames#notion-integration\n\n"
+        
+        base_msg += "💡 Quick Fix: Run 'extract-usernames --reconfigure' to update settings\n"
+        
+        return base_msg
     
     def get_all_existing_usernames(self, force_refresh: bool = False) -> Set[str]:
+        """Get all existing usernames from the database.
+        
+        Args:
+            force_refresh: Force refresh the cache
+            
+        Returns:
+            Set of lowercase usernames
+        """
         if self._existing_usernames_cache is not None and not force_refresh:
             return self._existing_usernames_cache
         
@@ -76,6 +163,16 @@ class NotionDatabaseManager:
         return usernames
     
     def create_page(self, username: str, instagram_url: str, status: str = "Didn't Approach") -> Dict:
+        """Create a new page in the Notion database.
+        
+        Args:
+            username: Instagram username
+            instagram_url: Full Instagram profile URL
+            status: Initial status (default: "Didn't Approach")
+            
+        Returns:
+            Result dictionary with success status and details
+        """
         result = {'success': False, 'page_id': None, 'url': None, 'error': None}
         
         try:
@@ -93,6 +190,7 @@ class NotionDatabaseManager:
             result['page_id'] = page.get("id")
             result['url'] = page.get("url")
             
+            # Update cache
             if self._existing_usernames_cache is not None:
                 self._existing_usernames_cache.add(username.lower())
         
@@ -104,6 +202,15 @@ class NotionDatabaseManager:
         return result
     
     def batch_create_pages(self, validated_accounts: List[Dict], skip_duplicates: bool = True) -> Dict[str, int]:
+        """Batch create pages for multiple accounts.
+        
+        Args:
+            validated_accounts: List of account dictionaries
+            skip_duplicates: Skip accounts already in database
+            
+        Returns:
+            Statistics dictionary
+        """
         stats = {'total': len(validated_accounts), 'created': 0, 'failed': 0, 'skipped': 0, 'errors': []}
         
         existing = set()
@@ -135,6 +242,11 @@ class NotionDatabaseManager:
         return stats
     
     def get_database_info(self) -> Dict:
+        """Get database information.
+        
+        Returns:
+            Dictionary with database metadata
+        """
         try:
             self._enforce_rate_limit()
             db = self.client.databases.retrieve(database_id=self.database_id)
