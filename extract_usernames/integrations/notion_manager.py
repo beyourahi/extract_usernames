@@ -27,6 +27,7 @@ class NotionDatabaseManager:
         self.logger = logging.getLogger(__name__)
         self._last_request_time = 0
         self._existing_usernames_cache: Optional[Set[str]] = None
+        self._data_source_id: Optional[str] = None
         self._verify_connection()
     
     def _clean_database_id(self, db_id: str) -> str:
@@ -58,6 +59,40 @@ class NotionDatabaseManager:
                 time.sleep(self.RATE_LIMIT_DELAY - elapsed)
         self._last_request_time = time.time()
     
+    def _get_data_source_id(self) -> str:
+        """Get the data source ID from the database.
+        
+        For databases with a single data source, returns that data source ID.
+        For multi-source databases, returns the first data source ID.
+        """
+        if self._data_source_id:
+            return self._data_source_id
+        
+        try:
+            self._enforce_rate_limit()
+            db = self.client.databases.retrieve(database_id=self.database_id)
+            
+            # Get data sources from database
+            data_sources = db.get('data_sources', [])
+            
+            if not data_sources:
+                # If no data sources, use database_id as fallback
+                self._data_source_id = self.database_id
+            else:
+                # Use the first data source (most common case)
+                self._data_source_id = data_sources[0]['id']
+                
+                if len(data_sources) > 1:
+                    self.logger.warning(
+                        f"Database has {len(data_sources)} data sources. Using first one: {self._data_source_id}"
+                    )
+            
+            return self._data_source_id
+        except Exception as e:
+            self.logger.warning(f"Could not get data source ID: {e}. Using database_id as fallback.")
+            self._data_source_id = self.database_id
+            return self._data_source_id
+    
     def _verify_connection(self):
         """Verify connection to Notion database with helpful error messages."""
         try:
@@ -65,6 +100,9 @@ class NotionDatabaseManager:
             db = self.client.databases.retrieve(database_id=self.database_id)
             db_title = db.get("title", [{}])[0].get("plain_text", "Unknown")
             self.logger.info(f"✅ Connected to Notion database: {db_title}")
+            
+            # Pre-fetch data source ID
+            self._get_data_source_id()
         except APIResponseError as e:
             error_code = getattr(e, 'code', 'unknown')
             error_msg = str(e)
@@ -138,18 +176,19 @@ class NotionDatabaseManager:
         usernames = set()
         has_more = True
         start_cursor = None
+        data_source_id = self._get_data_source_id()
         
         while has_more:
             self._enforce_rate_limit()
             
-            # Build query parameters
+            # Build query parameters for new API
             query_params = {"page_size": 100}
             if start_cursor:
                 query_params["start_cursor"] = start_cursor
             
-            # Call the query method correctly
-            response = self.client.databases.query(
-                database_id=self.database_id,
+            # Use data_sources.query() with data_source_id (new API)
+            response = self.client.data_sources.query(
+                data_source_id=data_source_id,
                 **query_params
             )
             
