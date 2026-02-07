@@ -126,13 +126,14 @@ if command -v ollama &> /dev/null; then
     fi
 else
     echo -e "  ${YELLOW}⚠️  Ollama not found${NC}"
+    echo -e "  ${GRAY}VLM-primary mode requires Ollama for maximum accuracy${NC}"
     echo -e "  ${GRAY}Installation instructions:${NC}"
     if [ "$OS" = "macOS" ]; then
         echo -e "  ${GRAY}brew install ollama${NC}"
     else
         echo -e "  ${GRAY}curl -fsSL https://ollama.com/install.sh | sh${NC}"
     fi
-    echo -e "  ${GRAY}Note: You can use --no-vlm flag to run without Ollama${NC}"
+    echo -e "  ${GRAY}Note: You can use --no-vlm flag for EasyOCR-only mode${NC}"
     OLLAMA_INSTALLED=false
 fi
 
@@ -179,8 +180,10 @@ echo -e "${GREEN}✅ Dependencies: Installed${NC}"
 if [ "$OLLAMA_INSTALLED" = true ]; then
     echo -e "${GREEN}✅ Ollama: Installed${NC}"
     echo -e "${GREEN}✅ GLM-OCR Model: Ready${NC}"
+    echo -e "${GREEN}✅ VLM-Primary Mode: Enabled${NC}"
 else
-    echo -e "${YELLOW}⚠️  Ollama: Not installed (optional)${NC}"
+    echo -e "${YELLOW}⚠️  Ollama: Not installed${NC}"
+    echo -e "${YELLOW}⚠️  VLM-Primary Mode: Unavailable${NC}"
 fi
 
 echo ""
@@ -191,13 +194,14 @@ echo -e "${NC}3. Check results in ~/Desktop/leads/${NC}"
 
 if [ "$OLLAMA_INSTALLED" = false ]; then
     echo ""
-    echo -e "${YELLOW}💡 Tip: Install Ollama for better accuracy${NC}"
+    echo -e "${YELLOW}💡 Tip: Install Ollama for VLM-primary mode (recommended)${NC}"
     if [ "$OS" = "macOS" ]; then
         echo -e "${GRAY}   brew install ollama${NC}"
     else
         echo -e "${GRAY}   curl -fsSL https://ollama.com/install.sh | sh${NC}"
     fi
-    echo -e "${GRAY}   Or use: python3 extract_usernames.py folder_name --no-vlm${NC}"
+    echo -e "${GRAY}   ollama pull glm-ocr:bf16${NC}"
+    echo -e "${GRAY}   Or use EasyOCR-only: python3 extract_usernames.py folder --no-vlm${NC}"
 fi
 
 if [ -d "venv" ]; then
