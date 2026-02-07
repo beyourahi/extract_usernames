@@ -6,11 +6,78 @@ Last updated: 2026-02-07
 
 ---
 
+## ⚠️ Git Workflow & Repository Strategy — READ FIRST
+
+**Commit Convention**
+
+Use Conventional Commits format:
+
+- `feat:` New features
+- `fix:` Bug fixes
+- `docs:` Documentation changes
+- `refactor:` Code refactoring without behavior change
+- `test:` Test additions or modifications
+- `chore:` Build process, dependencies, tooling
+- `style:` Formatting, whitespace
+- `perf:` Performance improvements
+
+**Examples:**
+```
+feat(cli): add --reconfigure flag for selective setup
+fix(config): resolve path expansion on Windows
+docs: update installation instructions
+refactor(prompts): simplify directory validation logic
+```
+
+**Commit Guidelines:**
+- Atomic commits (one logical change per commit)
+- Descriptive subjects (50 characters max)
+- Focus on "why" not "what" in commit body
+
+**Git Safety:**
+- NEVER commit without explicit permission
+- NEVER push without explicit permission
+- NEVER run destructive commands (`reset --hard`, `push --force`)
+- NEVER stage all files (`git add -A`, `git add .`) - stage specific files
+- Always create NEW commits (avoid `--amend`)
+
+---
+
 ## Project Overview
 
 **Repository:** https://github.com/beyourahi/extract_usernames  
 **Purpose:** Extract Instagram usernames from screenshots using dual-engine OCR (VLM-primary with EasyOCR fallback)  
 **Author:** Rahi Khan (Dropout Studio) - [@beyourahi](https://github.com/beyourahi)
+
+**Core Value Proposition:** Automated Instagram lead generation tool with 95%+ accuracy using vision language models, featuring persistent CLI configuration and optional Notion CRM integration.
+
+---
+
+## Tech Stack
+
+**Core Framework:**
+- Python 3.9+ (tested on 3.11)
+- Click 8.1+ for CLI interface
+- PyTorch for deep learning models
+
+**OCR Engines:**
+- Ollama + GLM-OCR (VLM-primary mode, recommended)
+- EasyOCR (fallback/standalone mode)
+- OpenCV for image preprocessing
+
+**CRM Integration:**
+- Notion API client for database sync
+- Instagram validation via HTTP requests
+- Tenacity for retry logic
+
+**Development Tools:**
+- setuptools + pyproject.toml for packaging
+- pytest for testing (future)
+- ruff + black for linting/formatting (future)
+
+**Runtime:**
+- Node.js not required (pure Python)
+- Ollama external dependency (optional)
 
 ---
 
@@ -44,21 +111,62 @@ Root files (backward compatibility):
    - Format: JSON with nested structure
    - Sections: `directories`, `extraction`, `notion`
    - CLI flags override saved config
+   - Cross-platform path handling
 
 2. **Interactive First-Time Setup**
    - Click prompts with validation
    - Smart defaults (Desktop folders)
    - Optional sections (skip Notion if not needed)
+   - Path existence verification
 
 3. **Backward Compatibility**
    - Original `extract_usernames.py` kept at repo root
    - New `main.py` wraps it via import
    - Legacy scripts still work standalone
+   - No breaking changes for existing users
 
 4. **Packaging with Setuptools**
    - Command: `extract-usernames` (hyphenated)
    - Package: `extract_usernames` (underscored)
    - Entry point: `extract_usernames.cli:main`
+   - Editable install for development
+
+### Data Flow
+
+1. CLI entry (`cli.py`) loads/prompts for config
+2. Config merged with CLI flags (flags take priority)
+3. Main wrapper (`main.py`) imports original `extract_usernames.py`
+4. Image processing with VLM (primary) or EasyOCR (fallback)
+5. Deduplication and validation
+6. Output generation (markdown files)
+7. Optional Notion sync (`notion_sync.py`)
+
+---
+
+## Common Commands
+
+**Development:**
+```bash
+pip install -e .        # Install package in editable mode
+extract-usernames       # Run CLI
+python -m extract_usernames.cli  # Alternative entry point
+```
+
+**Code Quality:**
+```bash
+pytest tests/           # Run tests (future)
+ruff check .            # Linting (future)
+black --check .         # Format check (future)
+mypy extract_usernames/ # Type checking (future)
+```
+
+**Package Building:**
+```bash
+python -m build         # Build wheel + tarball
+pip install dist/*.whl  # Install from wheel
+```
+
+**IMPORTANT:** Always ask before running ANY scripts. Never assume completion means scripts should run.
 
 ---
 
@@ -81,7 +189,18 @@ pip install -e .
 ### Dependencies
 - **Core:** `click>=8.1.0`, `torch`, `easyocr`, `opencv-python`, `numpy`
 - **Notion:** `notion-client`, `python-dotenv`, `requests`, `tenacity`
-- **VLM:** Ollama (external dependency)
+- **VLM:** Ollama (external dependency, optional)
+
+### Environment Variables
+
+Create `.env` file in project root (optional, for Notion):
+
+```bash
+NOTION_TOKEN=secret_xxx
+NOTION_DATABASE_ID=xxx
+```
+
+Alternatively, configure via interactive prompts or CLI flags.
 
 ---
 
@@ -204,6 +323,32 @@ final_config = config.merge_with_args(cli_args)
 
 ---
 
+## Code Style Guidelines
+
+**Python Standards:**
+- PEP 8 compliant
+- Type hints for public functions
+- Docstrings for modules and functions
+- Snake_case for variables/functions
+- PascalCase for classes
+
+**File Organization:**
+- Co-locate related functionality
+- Keep modules focused and single-purpose
+- Use `__init__.py` for package exports
+
+**Import Order:**
+1. Standard library
+2. Third-party packages
+3. Local modules
+
+**Error Handling:**
+- Use specific exceptions
+- Provide helpful error messages
+- Log errors with context
+
+---
+
 ## Extraction Pipeline
 
 ### Flow
@@ -303,6 +448,102 @@ with InstagramValidator(delay_between_requests=2.0) as validator:
 
 ---
 
+## Testing Practices
+
+**Current State:** No automated tests present.
+
+**Recommended Future Stack:**
+- **Unit Tests:** pytest
+- **Integration Tests:** Test CLI end-to-end
+- **Mocking:** responses library for HTTP mocking
+
+**Manual Testing Checklist:**
+- [ ] Interactive setup wizard (all paths)
+- [ ] Config save/load functionality
+- [ ] CLI flag overrides
+- [ ] VLM extraction accuracy
+- [ ] EasyOCR fallback behavior
+- [ ] Notion sync (create, deduplicate)
+- [ ] Cross-platform compatibility (Windows, macOS, Linux)
+
+---
+
+## Repository Etiquette
+
+### Commit Message Format
+
+See "Git Workflow" section at top of document.
+
+### Pull Request Guidelines
+
+- Descriptive title and body
+- Reference related issues
+- Test changes locally before PR
+- Update documentation if needed
+
+### Code Review
+
+- Be constructive and specific
+- Test reviewer's code locally
+- Suggest improvements with examples
+- Approve only when confident
+
+---
+
+## Project-Specific Warnings
+
+### CRITICAL - ABSOLUTE PRIORITY
+
+**1. Configuration File Corruption**
+
+- **Problem:** Invalid JSON in config file breaks CLI
+- **Solution:** Validate JSON before saving, use atomic writes
+- **Recovery:** Delete `~/.config/extract-usernames/config.json` and re-run setup
+
+**2. Ollama Connection Issues**
+
+- **Problem:** VLM mode fails silently if Ollama not running
+- **Solution:** CLI checks Ollama availability and warns user
+- **Fallback:** Always falls back to EasyOCR automatically
+
+**3. Path Handling Cross-Platform**
+
+- **Problem:** Windows uses backslashes, Unix uses forward slashes
+- **Solution:** Use `pathlib.Path` everywhere, never string concatenation
+- **Testing:** Test on Windows, macOS, and Linux
+
+**4. GPU Memory Exhaustion**
+
+- **Problem:** Processing many large images can exhaust GPU memory
+- **Solution:** Use `--workers 1` to reduce parallelism
+- **Detection:** Monitor GPU memory with `nvidia-smi` or similar
+
+**5. Notion API Rate Limits**
+
+- **Problem:** Batch uploads may hit Notion API rate limits
+- **Solution:** Built-in retry logic with exponential backoff (tenacity)
+- **Limit:** Notion allows ~3 requests/second
+
+**6. Unicode Handling**
+
+- **Problem:** Some usernames may contain special characters
+- **Solution:** Use UTF-8 encoding everywhere
+- **Validation:** Regex pattern only allows ASCII
+
+**7. Backward Compatibility**
+
+- **Problem:** Users may rely on old CLI behavior
+- **Solution:** Original scripts kept at repo root
+- **Testing:** Test both new and old workflows
+
+**8. Config Migration**
+
+- **Problem:** Future config schema changes break existing configs
+- **Solution:** Implement config version field and migration logic
+- **Current:** No versioning yet (TODO for v3.0)
+
+---
+
 ## Common Issues
 
 ### 1. "Config file not found" on first run
@@ -336,20 +577,34 @@ Verify:
 - Check GPU availability with `--diagnostics`
 - Try alternative VLM: `--vlm-model minicpm-v:8b-2.6-q8_0`
 
+### 6. Permission denied on config file
+```bash
+# Fix permissions on config directory
+chmod 755 ~/.config/extract-usernames
+chmod 644 ~/.config/extract-usernames/config.json
+```
+
+### 7. Import errors after package install
+```bash
+# Reinstall in editable mode
+pip uninstall extract-usernames
+pip install -e .
+```
+
 ---
 
 ## Development
 
 ### Running Tests
 ```bash
-pytest tests/
+pytest tests/  # Future
 ```
 
 ### Linting
 ```bash
-ruff check .
-black --check .
-mypy extract_usernames/
+ruff check .  # Future
+black --check .  # Future
+mypy extract_usernames/  # Future
 ```
 
 ### Building Package
@@ -362,6 +617,15 @@ python -m build
 ```bash
 pip install dist/extract_usernames-*.whl
 ```
+
+### Development Workflow
+
+1. Create feature branch (optional, not required)
+2. Make changes
+3. Test manually with `extract-usernames`
+4. Run linting (when available)
+5. Commit with conventional commit message
+6. Push to GitHub (with permission)
 
 ---
 
@@ -391,6 +655,10 @@ pip install dist/extract_usernames-*.whl
 - [ ] Export to CSV/Excel
 - [ ] Multiple Notion database support
 - [ ] Docker containerization
+- [ ] Automated testing suite
+- [ ] Config versioning and migration
+- [ ] GPU memory monitoring
+- [ ] Progress bars for long operations
 
 ---
 
@@ -399,3 +667,7 @@ pip install dist/extract_usernames-*.whl
 - **Issues:** https://github.com/beyourahi/extract_usernames/issues
 - **Author:** [@beyourahi](https://github.com/beyourahi)
 - **License:** MIT
+
+---
+
+**This is a production tool for lead generation. Follow best practices for data handling and API usage.**
