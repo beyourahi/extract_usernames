@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "instagram-username-extractor"
+version = "2.0.0"
+description = "Extract Instagram usernames from screenshots with VLM+OCR dual-engine validation"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Rahi Khan", email = "beyourahi@gmail.com"}
+]
+keywords = ["instagram", "ocr", "username", "extraction", "vlm", "notion"]
+
+[project.urls]
+Homepage = "https://github.com/beyourahi/extract_usernames"
+Repository = "https://github.com/beyourahi/extract_usernames"
+Issues = "https://github.com/beyourahi/extract_usernames/issues"
+
+[project.scripts]
+extract-usernames = "extract_usernames.cli:main"
