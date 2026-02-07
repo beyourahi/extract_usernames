@@ -47,10 +47,12 @@ try {
 
 # Check Ollama installation
 Write-Host "`n[3/5] Checking Ollama installation..." -ForegroundColor Yellow
+$ollamaInstalled = $false
 try {
     $ollamaVersion = ollama --version 2>&1
     if ($ollamaVersion) {
         Write-Host "  ✅ Ollama is installed" -ForegroundColor Green
+        $ollamaInstalled = $true
         
         # Check if Ollama service is running
         Write-Host "  Checking Ollama service..." -ForegroundColor Gray
@@ -66,13 +68,14 @@ try {
     }
 } catch {
     Write-Host "  ⚠️  Ollama not found" -ForegroundColor Yellow
-    Write-Host "  Download from: https://ollama.com/download" -ForegroundColor Gray
-    Write-Host "  Note: You can use --no-vlm flag to run without Ollama" -ForegroundColor Gray
-    $ollamaInstalled = $false
+    Write-Host "  VLM-primary mode requires Ollama for maximum accuracy" -ForegroundColor Gray
+    Write-Host "  Installation instructions:" -ForegroundColor Gray
+    Write-Host "    Download from: https://ollama.com/download" -ForegroundColor Gray
+    Write-Host "  Note: You can use --no-vlm flag for EasyOCR-only mode" -ForegroundColor Gray
 }
 
 # Download GLM-OCR model if Ollama is available
-if ($ollamaInstalled -ne $false) {
+if ($ollamaInstalled) {
     Write-Host "`n[4/5] Downloading GLM-OCR model..." -ForegroundColor Yellow
     Write-Host "  Model size: ~2.2GB (this may take a few minutes)..." -ForegroundColor Gray
     try {
@@ -81,6 +84,7 @@ if ($ollamaInstalled -ne $false) {
             Write-Host "  ✅ GLM-OCR model downloaded successfully" -ForegroundColor Green
         } else {
             Write-Host "  ⚠️  Model download had issues" -ForegroundColor Yellow
+            Write-Host "  You can download it later with: ollama pull glm-ocr:bf16" -ForegroundColor Gray
         }
     } catch {
         Write-Host "  ⚠️  Could not download model" -ForegroundColor Yellow
@@ -114,11 +118,13 @@ Write-Host "========================================`n" -ForegroundColor Cyan
 
 Write-Host "✅ Python: Installed" -ForegroundColor Green
 Write-Host "✅ Dependencies: Installed" -ForegroundColor Green
-if ($ollamaInstalled -ne $false) {
+if ($ollamaInstalled) {
     Write-Host "✅ Ollama: Installed" -ForegroundColor Green
     Write-Host "✅ GLM-OCR Model: Ready" -ForegroundColor Green
+    Write-Host "✅ VLM-Primary Mode: Enabled" -ForegroundColor Green
 } else {
-    Write-Host "⚠️  Ollama: Not installed (optional)" -ForegroundColor Yellow
+    Write-Host "⚠️  Ollama: Not installed" -ForegroundColor Yellow
+    Write-Host "⚠️  VLM-Primary Mode: Unavailable" -ForegroundColor Yellow
 }
 
 Write-Host "`nNext steps:" -ForegroundColor Cyan
@@ -126,10 +132,11 @@ Write-Host "1. Place Instagram screenshots in a folder on your Desktop" -Foregro
 Write-Host "2. Run: python extract_usernames.py folder_name" -ForegroundColor White
 Write-Host "3. Check results in ~/Desktop/leads/" -ForegroundColor White
 
-if ($ollamaInstalled -eq $false) {
-    Write-Host "`n💡 Tip: Install Ollama for better accuracy" -ForegroundColor Yellow
+if (-not $ollamaInstalled) {
+    Write-Host "`n💡 Tip: Install Ollama for VLM-primary mode (recommended)" -ForegroundColor Yellow
     Write-Host "   Download: https://ollama.com/download" -ForegroundColor Gray
-    Write-Host "   Or use: python extract_usernames.py folder_name --no-vlm" -ForegroundColor Gray
+    Write-Host "   Then run: ollama pull glm-ocr:bf16" -ForegroundColor Gray
+    Write-Host "   Or use EasyOCR-only: python extract_usernames.py folder --no-vlm" -ForegroundColor Gray
 }
 
 Write-Host "`nFor help: python extract_usernames.py --help" -ForegroundColor Gray
