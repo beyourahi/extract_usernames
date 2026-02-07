@@ -55,7 +55,7 @@ def run_initial_setup() -> Dict[str, Any]:
     click.secho("📤 Notion Integration (Optional)", fg="yellow", bold=True)
     notion_enabled = click.confirm(
         "Enable Notion sync?",
-        default=False
+        default=True
     )
     
     config['notion'] = {
@@ -202,7 +202,7 @@ def reconfigure_notion(config: Dict[str, Any]) -> Dict[str, Any]:
     
     notion_enabled = click.confirm(
         "Enable Notion sync?",
-        default=config['notion'].get('enabled', False)
+        default=config['notion'].get('enabled', True)
     )
     
     config['notion']['enabled'] = notion_enabled
