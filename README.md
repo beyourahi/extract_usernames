@@ -84,6 +84,83 @@ python extract_usernames.py images --diagnostics
 
 **Supported formats:** JPG, PNG, WEBP, BMP, TIFF
 
+## 📤 Notion Integration (Optional)
+
+After extracting usernames, automatically validate and sync them to your Notion "Client Hunt" database.
+
+### Setup
+
+1. Create a Notion integration at [notion.so/my-integrations](https://www.notion.so/my-integrations)
+2. Share your "Client Hunt" database with the integration
+3. Copy the integration token and database ID
+4. Create `.env` file in the project root:
+   ```bash
+   NOTION_TOKEN=your_integration_token_here
+   NOTION_DATABASE_ID=your_database_id_here
+   ```
+
+### Usage
+
+```bash
+# After running extract_usernames.py, sync leads to Notion
+python leads_to_notion.py
+
+# Dry run to preview what will be added (no actual changes)
+python leads_to_notion.py --dry-run
+
+# Skip Instagram validation, trust extraction results
+python leads_to_notion.py --skip-validation
+
+# Custom Instagram request delay (default: 2 seconds)
+python leads_to_notion.py --delay 3.0
+
+# Verbose output with debug information
+python leads_to_notion.py --verbose
+```
+
+### Features
+
+- **HTTP Validation**: Verifies Instagram accounts exist (no API needed)
+- **Duplicate Detection**: Checks both current batch and existing Notion entries
+- **Safe Operations**: Only adds new entries, never modifies existing data
+- **Robust Error Handling**: Continues on failures with detailed logging
+- **Rate Limiting**: Respects Instagram (2s) and Notion (0.35s) rate limits
+- **Comprehensive Reporting**: JSON logs + Markdown summary
+
+### Output
+
+Results are saved to:
+- `validation_results/validation_results_{timestamp}.json` - Detailed validation log
+- `~/Desktop/leads/notion_sync_report.md` - Human-readable summary
+- Console output with real-time progress
+
+### CLI Options
+
+```
+--input FILE          Input file with usernames (default: ~/Desktop/leads/verified_usernames.md)
+--output DIR          Results directory (default: ./validation_results)
+--skip-validation     Skip Instagram validation, only add to Notion
+--skip-notion         Only validate, don't sync to Notion
+--delay SECONDS       Delay between Instagram requests (default: 2.0)
+--dry-run             Preview changes without modifying Notion
+--force-add           Skip duplicate checks (use with caution)
+--verbose             Enable debug logging
+```
+
+### Dependencies
+
+Install Notion integration dependencies:
+```bash
+pip install notion-client requests python-dotenv tenacity
+```
+
+Or reinstall all dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+**For complete setup instructions, see [NOTION_SETUP.md](NOTION_SETUP.md)**
+
 ## 🔧 How It Works
 
 ### VLM-Primary Dual-Engine Architecture (Default)
