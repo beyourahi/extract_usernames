@@ -1,143 +1,100 @@
-# Instagram Username Extractor - Windows Setup Script
-# PowerShell script for automated installation on Windows
+# Instagram Username Extractor - Modern Setup Script
+# One-command installation with pip install -e .
 
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "Instagram Username Extractor - Setup" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
 
-# Check Python installation
-Write-Host "[1/5] Checking Python installation..." -ForegroundColor Yellow
+# Check Python
+Write-Host "[1/4] Checking Python..." -ForegroundColor Yellow
 try {
     $pythonVersion = python --version 2>&1
     if ($pythonVersion -match "Python (\d+)\.(\d+)") {
         $major = [int]$matches[1]
         $minor = [int]$matches[2]
         if ($major -ge 3 -and $minor -ge 9) {
-            Write-Host "  ✅ Found $pythonVersion" -ForegroundColor Green
+            Write-Host "  ✅ Python $pythonVersion" -ForegroundColor Green
         } else {
-            Write-Host "  ❌ Python 3.9+ required, found $pythonVersion" -ForegroundColor Red
-            Write-Host "  Please install Python 3.11+ from https://www.python.org/downloads/" -ForegroundColor Yellow
+            Write-Host "  ❌ Python 3.9+ required" -ForegroundColor Red
             exit 1
         }
     }
 } catch {
-    Write-Host "  ❌ Python not found in PATH" -ForegroundColor Red
-    Write-Host "  Please install Python 3.11+ from https://www.python.org/downloads/" -ForegroundColor Yellow
-    Write-Host "  Make sure to check 'Add Python to PATH' during installation" -ForegroundColor Yellow
+    Write-Host "  ❌ Python not found" -ForegroundColor Red
+    Write-Host "  Install: https://www.python.org/downloads/" -ForegroundColor Yellow
     exit 1
 }
 
-# Install Python dependencies
-Write-Host "`n[2/5] Installing Python dependencies..." -ForegroundColor Yellow
-Write-Host "  This may take 5-10 minutes (downloading ~2-3GB)..." -ForegroundColor Gray
+# Install package
+Write-Host "`n[2/4] Installing package..." -ForegroundColor Yellow
 try {
-    python -m pip install --upgrade pip --quiet
-    python -m pip install -r requirements.txt
+    python -m pip install -e . --quiet
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "  ✅ Dependencies installed successfully" -ForegroundColor Green
+        Write-Host "  ✅ Package installed" -ForegroundColor Green
     } else {
-        Write-Host "  ⚠️  Some dependencies failed to install" -ForegroundColor Yellow
-        Write-Host "  Try running: pip install --user -r requirements.txt" -ForegroundColor Gray
+        Write-Host "  ❌ Installation failed" -ForegroundColor Red
+        exit 1
     }
 } catch {
-    Write-Host "  ❌ Failed to install dependencies" -ForegroundColor Red
-    Write-Host "  Try: pip install --user -r requirements.txt" -ForegroundColor Yellow
-    Write-Host "  Or create a virtual environment first" -ForegroundColor Yellow
+    Write-Host "  ❌ Installation failed" -ForegroundColor Red
+    exit 1
 }
 
-# Check Ollama installation
-Write-Host "`n[3/5] Checking Ollama installation..." -ForegroundColor Yellow
-$ollamaInstalled = $false
+# Check Ollama
+Write-Host "`n[3/4] Checking Ollama..." -ForegroundColor Yellow
+$ollamaOk = $false
 try {
     $ollamaVersion = ollama --version 2>&1
     if ($ollamaVersion) {
-        Write-Host "  ✅ Ollama is installed" -ForegroundColor Green
-        $ollamaInstalled = $true
+        Write-Host "  ✅ Ollama installed" -ForegroundColor Green
+        $ollamaOk = $true
         
-        # Check if Ollama service is running
-        Write-Host "  Checking Ollama service..." -ForegroundColor Gray
-        try {
-            $ollamaList = ollama list 2>&1
-            Write-Host "  ✅ Ollama service is running" -ForegroundColor Green
-        } catch {
-            Write-Host "  ⚠️  Ollama service not running" -ForegroundColor Yellow
-            Write-Host "  Starting Ollama service..." -ForegroundColor Gray
-            Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden
-            Start-Sleep -Seconds 3
+        # Pull GLM-OCR model
+        Write-Host "  Downloading GLM-OCR model (~2.2GB)..." -ForegroundColor Cyan
+        ollama pull glm-ocr:bf16 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  ✅ Model ready" -ForegroundColor Green
+        } else {
+            Write-Host "  ⚠️  Model download incomplete" -ForegroundColor Yellow
         }
     }
 } catch {
-    Write-Host "  ⚠️  Ollama not found" -ForegroundColor Yellow
-    Write-Host "  VLM-primary mode requires Ollama for maximum accuracy" -ForegroundColor Gray
-    Write-Host "  Installation instructions:" -ForegroundColor Gray
-    Write-Host "    Download from: https://ollama.com/download" -ForegroundColor Gray
-    Write-Host "  Note: You can use --no-vlm flag for EasyOCR-only mode" -ForegroundColor Gray
+    Write-Host "  ⚠️  Ollama not found (VLM mode unavailable)" -ForegroundColor Yellow
+    Write-Host "  Install: https://ollama.com/download" -ForegroundColor Yellow
 }
 
-# Download GLM-OCR model if Ollama is available
-if ($ollamaInstalled) {
-    Write-Host "`n[4/5] Downloading GLM-OCR model..." -ForegroundColor Yellow
-    Write-Host "  Model size: ~2.2GB (this may take a few minutes)..." -ForegroundColor Gray
-    try {
-        ollama pull glm-ocr:bf16
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "  ✅ GLM-OCR model downloaded successfully" -ForegroundColor Green
-        } else {
-            Write-Host "  ⚠️  Model download had issues" -ForegroundColor Yellow
-            Write-Host "  You can download it later with: ollama pull glm-ocr:bf16" -ForegroundColor Gray
-        }
-    } catch {
-        Write-Host "  ⚠️  Could not download model" -ForegroundColor Yellow
-        Write-Host "  You can download it later with: ollama pull glm-ocr:bf16" -ForegroundColor Gray
-    }
-} else {
-    Write-Host "`n[4/5] Skipping model download (Ollama not installed)" -ForegroundColor Yellow
-}
-
-# Validate installation
-Write-Host "`n[5/5] Validating installation..." -ForegroundColor Yellow
+# Validate
+Write-Host "`n[4/4] Validating..." -ForegroundColor Yellow
 try {
-    $helpOutput = python extract_usernames.py --help 2>&1
-    if ($helpOutput -match "usage:") {
-        Write-Host "  ✅ Installation validated successfully" -ForegroundColor Green
+    $version = extract-usernames --version 2>&1
+    if ($version) {
+        Write-Host "  ✅ CLI ready" -ForegroundColor Green
     } else {
-        Write-Host "  ⚠️  Validation had warnings" -ForegroundColor Yellow
+        Write-Host "  ❌ Validation failed" -ForegroundColor Red
+        exit 1
     }
 } catch {
     Write-Host "  ❌ Validation failed" -ForegroundColor Red
-    Write-Host "  Run these commands for diagnostics:" -ForegroundColor Yellow
-    Write-Host "    python --version" -ForegroundColor Gray
-    Write-Host "    pip list" -ForegroundColor Gray
-    Write-Host "    ollama list" -ForegroundColor Gray
+    exit 1
 }
 
-# Print summary
+# Summary
 Write-Host "`n========================================" -ForegroundColor Cyan
-Write-Host "Setup Complete!" -ForegroundColor Cyan
+Write-Host "✅ Setup Complete!" -ForegroundColor Green
 Write-Host "========================================`n" -ForegroundColor Cyan
 
-Write-Host "✅ Python: Installed" -ForegroundColor Green
-Write-Host "✅ Dependencies: Installed" -ForegroundColor Green
-if ($ollamaInstalled) {
-    Write-Host "✅ Ollama: Installed" -ForegroundColor Green
-    Write-Host "✅ GLM-OCR Model: Ready" -ForegroundColor Green
-    Write-Host "✅ VLM-Primary Mode: Enabled" -ForegroundColor Green
-} else {
-    Write-Host "⚠️  Ollama: Not installed" -ForegroundColor Yellow
-    Write-Host "⚠️  VLM-Primary Mode: Unavailable" -ForegroundColor Yellow
+Write-Host "Quick Start:" -ForegroundColor Cyan
+Write-Host "  1. Place screenshots on your Desktop" -ForegroundColor White
+Write-Host "  2. Run: extract-usernames" -ForegroundColor Green
+Write-Host "  3. Follow interactive prompts" -ForegroundColor White
+
+Write-Host "`nOr use flags:" -ForegroundColor Cyan
+Write-Host "  extract-usernames --input my_screenshots --output results" -ForegroundColor Green
+
+if (-not $ollamaOk) {
+    Write-Host "`n💡 For best accuracy, install Ollama:" -ForegroundColor Yellow
+    Write-Host "  https://ollama.com/download" -ForegroundColor Gray
+    Write-Host "  ollama pull glm-ocr:bf16" -ForegroundColor Gray
 }
 
-Write-Host "`nNext steps:" -ForegroundColor Cyan
-Write-Host "1. Place Instagram screenshots in a folder on your Desktop" -ForegroundColor White
-Write-Host "2. Run: python extract_usernames.py folder_name" -ForegroundColor White
-Write-Host "3. Check results in ~/Desktop/leads/" -ForegroundColor White
-
-if (-not $ollamaInstalled) {
-    Write-Host "`n💡 Tip: Install Ollama for VLM-primary mode (recommended)" -ForegroundColor Yellow
-    Write-Host "   Download: https://ollama.com/download" -ForegroundColor Gray
-    Write-Host "   Then run: ollama pull glm-ocr:bf16" -ForegroundColor Gray
-    Write-Host "   Or use EasyOCR-only: python extract_usernames.py folder --no-vlm" -ForegroundColor Gray
-}
-
-Write-Host "`nFor help: python extract_usernames.py --help" -ForegroundColor Gray
-Write-Host "Documentation: https://github.com/beyourahi/extract_usernames`n" -ForegroundColor Gray
+Write-Host "`nDocumentation: https://github.com/beyourahi/extract_usernames`n" -ForegroundColor Cyan

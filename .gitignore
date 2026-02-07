@@ -26,6 +26,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+PIPFILE.lock
 
 # Virtual environments
 venv/
@@ -49,3 +50,16 @@ ground_truth.csv
 validation_results/
 *.log
 notion_sync_report.md
+
+# Configuration directory (user-specific)
+.config/extract-usernames/
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
