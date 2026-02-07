@@ -41,3 +41,5 @@ ENV/
 
 # Project-specific
 ground_truth.csv
+
+.env
