@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import ConfigManager
-from . import prompts
+from .ocr import prompts
 
 
 @click.command()
@@ -164,7 +164,7 @@ def main(
             click.secho("📤 Syncing to Notion", fg="cyan", bold=True)
             click.echo("=" * 70 + "\n")
             
-            from .notion_sync import run_notion_sync
+            from .integrations.notion_sync import run_notion_sync
             
             notion_results = run_notion_sync(
                 input_file=Path(extraction_config['output_dir']) / "verified_usernames.md",
