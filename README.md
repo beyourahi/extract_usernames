@@ -422,19 +422,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
-
----
-
-## Changelog
-
-### v2.0.0 (2026-02-07)
-- 🏗️ Complete project restructuring
-- 📁 Organized codebase into logical modules
-- 🔧 Improved configuration management
-- 📦 Modern Python packaging with pyproject.toml
-- 📚 Enhanced documentation
-
-### v1.0.0
-- Initial release with VLM + EasyOCR dual-engine
-- Notion integration
-- Interactive CLI
