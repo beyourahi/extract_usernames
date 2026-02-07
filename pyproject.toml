@@ -59,7 +59,6 @@ dev = [
 Homepage = "https://github.com/beyourahi/extract_usernames"
 Repository = "https://github.com/beyourahi/extract_usernames"
 Issues = "https://github.com/beyourahi/extract_usernames/issues"
-Changelog = "https://github.com/beyourahi/extract_usernames/blob/main/README.md#changelog"
 Documentation = "https://github.com/beyourahi/extract_usernames#readme"
 
 [project.scripts]
