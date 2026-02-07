@@ -16,9 +16,9 @@ def run_initial_setup() -> Dict[str, Any]:
     
     # Basic settings
     click.secho("📁 Directory Settings", fg="yellow", bold=True)
-    click.echo("\n💡 Tip: You can use any directory name - it doesn't have to be 'screenshots'")
+    click.echo("\n💡 Tip: Enter just the folder name (e.g. 'screenshots') or a full path")
     config['input_dir'] = click.prompt(
-        "Screenshots directory (can be any folder name)",
+        "Screenshots directory",
         type=str,
         default=str(Path.home() / "Desktop" / "screenshots")
     )
@@ -71,7 +71,6 @@ def run_initial_setup() -> Dict[str, Any]:
         config['notion']['token'] = click.prompt(
             "Notion integration token",
             type=str,
-            hide_input=True,
             default=""
         )
         config['notion']['database_id'] = click.prompt(
@@ -168,9 +167,9 @@ def prompt_reconfigure_option() -> str:
 def reconfigure_directories(config: Dict[str, Any]) -> Dict[str, Any]:
     """Reconfigure directory settings."""
     click.secho("\n📁 Directory Settings", fg="yellow", bold=True)
-    click.echo("\n💡 Tip: You can specify any directory path - custom names are fully supported")
+    click.echo("\n💡 Tip: Enter just the folder name or a full path")
     config['input_dir'] = click.prompt(
-        "Screenshots directory (any folder name or path)",
+        "Screenshots directory",
         type=str,
         default=config.get('input_dir', str(Path.home() / "Desktop" / "screenshots"))
     )
@@ -234,8 +233,7 @@ def reconfigure_notion(config: Dict[str, Any]) -> Dict[str, Any]:
             "Notion integration token",
             type=str,
             default=current_token,
-            show_default=False,
-            hide_input=True
+            show_default=False
         )
         config['notion']['token'] = new_token if new_token else current_token
         
