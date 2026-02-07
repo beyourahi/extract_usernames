@@ -10,6 +10,48 @@ from .config import ConfigManager
 from .ocr import prompts
 
 
+def resolve_directory_path(path_str: str) -> Path:
+    """Resolve directory path intelligently.
+    
+    Handles:
+    - Absolute paths: /Users/name/folder
+    - Relative paths: ./folder or ../folder
+    - Folder names: screenshots
+      * Tries current dir first
+      * Falls back to ~/Desktop/[name]
+      * Falls back to ~/[name]
+    
+    Args:
+        path_str: User input path string
+        
+    Returns:
+        Resolved Path object
+    """
+    path = Path(path_str).expanduser()
+    
+    # If it's absolute or starts with ./ or ../, resolve normally
+    if path.is_absolute() or str(path_str).startswith(('./', '../', '.\\', '..\\')):
+        return path.resolve()
+    
+    # If it exists in current directory, use it
+    if path.exists():
+        return path.resolve()
+    
+    # Try ~/Desktop/[name]
+    desktop_path = Path.home() / "Desktop" / path_str
+    if desktop_path.exists():
+        return desktop_path
+    
+    # Try ~/[name]
+    home_path = Path.home() / path_str
+    if home_path.exists():
+        return home_path
+    
+    # If nothing exists, return current directory + name
+    # (Will fail validation but shows what was attempted)
+    return path.resolve()
+
+
 @click.command()
 @click.argument('input_path', required=False, type=click.Path(exists=True))
 @click.option('--output', '-o', type=click.Path(), help='Output directory')
@@ -118,12 +160,23 @@ def main(
         'diagnostics': diagnostics if diagnostics else config.get('diagnostics', False),
     }
     
-    # Validate input directory
-    input_dir = Path(extraction_config['input_dir'])
+    # Resolve and validate input directory
+    input_dir = resolve_directory_path(extraction_config['input_dir'])
     if not input_dir.exists():
         click.secho(f"\n❌ Error: Input directory does not exist: {input_dir}", fg="red")
-        click.echo(f"\nCreate it or run: extract-usernames --reconfigure")
+        click.echo(f"\nTried looking for '{extraction_config['input_dir']}' in:")
+        click.echo(f"  • Current directory: {Path.cwd()}")
+        click.echo(f"  • Desktop: {Path.home() / 'Desktop'}")
+        click.echo(f"  • Home: {Path.home()}")
+        click.echo(f"\n💡 Create the folder or run: extract-usernames --reconfigure")
         sys.exit(1)
+    
+    # Resolve output directory (create if doesn't exist)
+    output_dir = resolve_directory_path(extraction_config['output_dir'])
+    
+    # Update extraction config with resolved paths
+    extraction_config['input_dir'] = str(input_dir)
+    extraction_config['output_dir'] = str(output_dir)
     
     # Run extraction
     try:
