@@ -141,11 +141,17 @@ class NotionDatabaseManager:
         
         while has_more:
             self._enforce_rate_limit()
-            query_params = {"database_id": self.database_id, "page_size": 100}
+            
+            # Build query parameters
+            query_params = {"page_size": 100}
             if start_cursor:
                 query_params["start_cursor"] = start_cursor
             
-            response = self.client.databases.query(**query_params)
+            # Call the query method correctly
+            response = self.client.databases.query(
+                database_id=self.database_id,
+                **query_params
+            )
             
             for page in response.get("results", []):
                 props = page.get("properties", {})
