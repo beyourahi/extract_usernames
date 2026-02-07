@@ -8,6 +8,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.pyc
 
 # Distribution / packaging
 .Python
@@ -32,6 +33,8 @@ PIPFILE.lock
 venv/
 env/
 ENV/
+env.bak/
+venv.bak/
 
 # IDE
 .vscode/
@@ -39,27 +42,58 @@ ENV/
 *.swp
 *.swo
 *~
+.project
+.pydevproject
 
-# Project-specific
+# Project-specific output
 ground_truth.csv
+verified_usernames.md
+needs_review.md
+extraction_report.md
+debug/
+diagnostics/
 
 # Environment variables
 .env
+.env.local
 
 # Notion integration artifacts
 validation_results/
 *.log
 notion_sync_report.md
 
-# Configuration directory (user-specific)
-.config/extract-usernames/
+# User configuration (stored in home directory)
+# .config/extract-usernames/
 
-# Pytest
+# Test output
 .pytest_cache/
 .coverage
 htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
 
-# MyPy
+# Type checking
 .mypy_cache/
 .dmypy.json
 dmypy.json
+.pyre/
+.pytype/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Documentation builds
+docs/_build/
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Temporary files
+*.tmp
+temp/
+tmp/
