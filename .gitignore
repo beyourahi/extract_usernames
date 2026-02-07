@@ -42,4 +42,10 @@ ENV/
 # Project-specific
 ground_truth.csv
 
+# Environment variables
 .env
+
+# Notion integration artifacts
+validation_results/
+*.log
+notion_sync_report.md
