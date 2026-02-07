@@ -10,6 +10,7 @@ License: MIT
 import os
 import sys
 import json
+import re
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -21,6 +22,12 @@ from .notion_manager import NotionDatabaseManager
 
 def load_usernames_from_markdown(file_path: Path) -> List[str]:
     """Load Instagram usernames from a markdown file.
+    
+    Handles various formats:
+    - Plain usernames: username1
+    - Bullet lists: - username1, * username1, • username1
+    - Numbered lists: 1. username1, 2. username1
+    - With @ symbol: @username1
     
     Args:
         file_path: Path to markdown file
@@ -35,11 +42,26 @@ def load_usernames_from_markdown(file_path: Path) -> List[str]:
     with open(file_path, 'r', encoding='utf-8') as f:
         for line in f:
             line = line.strip()
+            
+            # Skip empty lines and headers
             if not line or line.startswith('#'):
                 continue
-            line = line.lstrip('-*•@').strip()
-            if line:
-                username = line.split()[0]
+            
+            # Remove common list prefixes: bullets, numbers, @ symbols
+            # Patterns: "- ", "* ", "• ", "@", "1. ", "2. ", etc.
+            line = re.sub(r'^[-*•@]\s*', '', line)  # Remove bullet/@ prefix
+            line = re.sub(r'^\d+\.\s*', '', line)   # Remove numbered list prefix
+            line = line.strip()
+            
+            if not line:
+                continue
+            
+            # Extract first word as username (handles multiple words on same line)
+            username = line.split()[0] if line else None
+            
+            # Additional cleanup: remove @ if it's still there
+            if username:
+                username = username.lstrip('@').strip()
                 if username:
                     usernames.append(username)
     
