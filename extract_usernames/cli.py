@@ -64,9 +64,8 @@ def resolve_directory_path(path_str: str) -> Path:
 @click.option('--reset-config', is_flag=True, help='Reset configuration to defaults')
 @click.option('--notion-sync', is_flag=True, help='Sync to Notion after extraction')
 @click.option('--no-notion-sync', is_flag=True, help='Skip Notion sync')
-@click.option('--merge-duplicates', is_flag=True, help='Merge duplicate entries in Notion after sync')
-@click.option('--keep-strategy', type=click.Choice(['oldest', 'newest']), default='oldest', help='Which duplicate to keep (default: oldest)')
-@click.option('--dry-run-merge', is_flag=True, help='Preview merge without making changes')
+@click.option('--deduplicate/--no-deduplicate', default=True, help='Auto-deduplicate Notion entries after sync (default: on)')
+@click.option('--dry-run-dedup', is_flag=True, help='Preview deduplication without removing entries')
 @click.version_option(version='2.0.0', prog_name='Instagram Username Extractor')
 def main(
     input_path: Optional[str],
@@ -80,9 +79,8 @@ def main(
     reset_config: bool,
     notion_sync: bool,
     no_notion_sync: bool,
-    merge_duplicates: bool,
-    keep_strategy: str,
-    dry_run_merge: bool,
+    deduplicate: bool,
+    dry_run_dedup: bool,
 ):
     """Extract Instagram usernames from screenshots with VLM+OCR dual-engine validation.
     
@@ -91,7 +89,9 @@ def main(
       extract-usernames                           # Use saved config, prompt for input
       extract-usernames my_screenshots            # Extract from specific folder
       extract-usernames --reconfigure             # Update settings
-      extract-usernames --notion-sync --merge-duplicates  # Sync and merge duplicates
+      extract-usernames --notion-sync             # Sync to Notion (auto-deduplicates)
+      extract-usernames --no-deduplicate          # Skip deduplication
+      extract-usernames --dry-run-dedup           # Preview deduplication without removing
     
     \b
     Examples:
@@ -99,8 +99,7 @@ def main(
       extract-usernames --no-vlm --output ./results
       extract-usernames --vlm-model minicpm-v:8b-2.6-q8_0
       extract-usernames --diagnostics --notion-sync
-      extract-usernames --merge-duplicates --keep-strategy newest
-      extract-usernames --dry-run-merge  # Preview merge without changes
+      extract-usernames --notion-sync --dry-run-dedup  # Preview what would be merged
     """
     config_manager = ConfigManager()
     
@@ -154,7 +153,7 @@ def main(
             return
     
     # Show current config and confirm
-    if not input_path and not any([output, no_vlm, vlm_model, diagnostics, notion_sync, no_notion_sync, merge_duplicates]):
+    if not input_path and not any([output, no_vlm, vlm_model, diagnostics, notion_sync, no_notion_sync]):
         if not prompts.confirm_config(config):
             if click.confirm("Reconfigure settings?", default=True):
                 click.echo("\nRun: extract-usernames --reconfigure")
@@ -234,26 +233,31 @@ def main(
                 database_id=config['notion']['database_id'],
                 skip_validation=config['notion']['skip_validation'],
                 delay=config['notion']['validation_delay'],
-                merge_duplicates=merge_duplicates,
-                keep_strategy=keep_strategy,
-                dry_run_merge=dry_run_merge,
+                auto_deduplicate=deduplicate,
+                dry_run_dedup=dry_run_dedup,
             )
             
             click.secho(f"\n✅ Notion sync complete!", fg="green", bold=True)
             click.echo(f"Added to Notion: {notion_results.get('added_count', 0)}")
             click.echo(f"Duplicates skipped: {notion_results.get('duplicate_count', 0)}")
             
-            # Show merge stats if merge was performed
-            if notion_results.get('merge_stats'):
-                merge_stats = notion_results['merge_stats']
+            # Show deduplication stats if performed
+            if notion_results.get('dedup_stats'):
+                dedup_stats = notion_results['dedup_stats']
                 click.echo("\n" + "="* 70)
-                click.secho("🔄 Duplicate Merge Results", fg="cyan", bold=True)
+                if dry_run_dedup:
+                    click.secho("📊 Deduplication Preview (Dry Run)", fg="yellow", bold=True)
+                else:
+                    click.secho("✅ Deduplication Complete", fg="green", bold=True)
                 click.echo("=" * 70)
-                click.echo(f"Duplicate groups found: {merge_stats['duplicate_groups']}")
-                click.echo(f"Entries archived: {merge_stats['archived']}")
-                click.echo(f"Entries kept: {merge_stats['kept']}")
-                if merge_stats['errors'] > 0:
-                    click.echo(f"Errors: {merge_stats['errors']}")
+                click.echo(f"Duplicate groups found: {dedup_stats['duplicate_groups']}")
+                click.echo(f"Total duplicates: {dedup_stats['duplicates_found']}")
+                if not dry_run_dedup:
+                    click.echo(f"Duplicates removed: {dedup_stats['duplicates_removed']}")
+                    if dedup_stats['errors'] > 0:
+                        click.secho(f"Errors: {dedup_stats['errors']}", fg="yellow")
+                else:
+                    click.echo(f"\n💡 Run without --dry-run-dedup to actually remove duplicates")
         
     except KeyboardInterrupt:
         click.echo("\n\n⚠️  Extraction cancelled by user.")
