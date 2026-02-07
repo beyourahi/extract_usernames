@@ -9,7 +9,7 @@ from typing import Dict, Any
 warnings.filterwarnings('ignore', category=UserWarning, module='torch.utils.data.dataloader')
 
 # Import the original extraction logic
-# We keep extract_usernames.py at repo root for backward compatibility
+# We keep extract_usernames.py in _archive for backward compatibility
 # but expose run_extraction() API for the new CLI
 
 def run_extraction(
@@ -48,19 +48,14 @@ def run_extraction(
     import sys
     from pathlib import Path
     
-    # Add repo root to path for backward compatibility with original script
-    repo_root = Path(__file__).parent.parent
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-    
-    # Import the original extraction script
-    # This maintains all the complex logic from extract_usernames.py
+    # Import the archived extraction script
+    # This maintains all the complex logic from the original extract_usernames.py
     try:
-        import extract_usernames as extractor
+        from ._archive import extract_usernames as extractor
     except ImportError:
         raise ImportError(
-            "Could not import extract_usernames.py. "
-            "Make sure the file exists at the repository root."
+            "Could not import extract_usernames.py from _archive. "
+            "Make sure the file exists in extract_usernames/_archive/."
         )
     
     # Override module-level configuration
@@ -154,5 +149,5 @@ def run_extraction(
 
 if __name__ == '__main__':
     # If run directly, execute the original script
-    import extract_usernames
+    from ._archive import extract_usernames
     extract_usernames.main()
