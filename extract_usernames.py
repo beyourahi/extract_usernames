@@ -9,6 +9,7 @@ import shutil
 import argparse
 import platform
 from pathlib import Path
+from collections import defaultdict
 import cv2
 import numpy as np
 import easyocr
@@ -84,15 +85,16 @@ def detect_hardware():
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description='Extract Instagram usernames from screenshots using universal GPU/CPU acceleration',
+        description='Extract Instagram usernames using VLM-primary dual-engine architecture',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s my_images                    # Uses ~/Desktop/my_images
+  %(prog)s my_images                    # VLM-primary mode (default)
   %(prog)s /path/to/folder              # Uses absolute path
   %(prog)s images --output /tmp         # Custom output directory
-  %(prog)s images --no-vlm              # Disable VLM, EasyOCR only
+  %(prog)s images --no-vlm              # EasyOCR-only legacy mode
   %(prog)s images --vlm-model minicpm-v:8b-2.6-q8_0  # Use alternative VLM model
+  %(prog)s images --diagnostics         # Save debug files
         """
     )
 
@@ -113,12 +115,12 @@ Examples:
     parser.add_argument(
         '--no-vlm',
         action='store_true',
-        help='Disable VLM second opinion (EasyOCR only)'
+        help='Disable VLM (EasyOCR-only legacy mode)'
     )
     parser.add_argument(
         '--vlm-model',
         default='glm-ocr:bf16',
-        help='VLM model to use (default: glm-ocr:bf16). Examples: minicpm-v:8b-2.6-q8_0, qwen2.5vl:7b'
+        help='VLM model to use (default: glm-ocr:bf16). Examples: minicpm-v:8b-2.6-q8_0, qwen2.5-vl:7b'
     )
 
     args = parser.parse_args()
@@ -311,26 +313,24 @@ def _find_dotted_sibling(winner_username, results_per_variant, winner_conf):
 
 
 # Known OCR confusion pairs: (misread, correct)
-# When two variants disagree and one contains a misread pattern while
-# the other contains the correct pattern, prefer the correct one.
 CONFUSION_CORRECTIONS = [
-    ('tf', 'ff'),   # ejlifestyleotficial -> ejlifestyleofficial
-    ('a', '4'),     # secretshop2a -> secretshop24
-    ('x', 'd'),     # lyonorabx -> lyonorabd
+    ('tf', 'ff'),
+    ('a', '4'),
+    ('x', 'd'),
     ('cl', 'd'),
     ('rn', 'm'),
     ('vv', 'w'),
     ('ii', 'u'),
     ('l', '1'),
     ('0', 'o'),
+    ('5', 's'),
+    ('8', 'b'),
 ]
 
 
 def _find_confusion_correction(winner_username, results_per_variant, winner_conf):
     """Check if any variant has a correction for a known OCR confusion pattern.
 
-    When two variants produce usernames that differ only by a known confusion
-    pair, prefer the variant whose text contains the 'correct' side of the pair.
     Returns (username, confidence) or None.
     """
     for r in results_per_variant:
@@ -338,27 +338,28 @@ def _find_confusion_correction(winner_username, results_per_variant, winner_conf
         if candidate == winner_username:
             continue
 
-        # Only consider candidates that are very similar (differ by 1-2 chars)
         dist = levenshtein_distance(candidate, winner_username)
         if dist == 0 or dist > 3:
             continue
 
-        # Check each confusion pair: does the difference match a known pattern?
         for misread, correct in CONFUSION_CORRECTIONS:
-            # Case 1: winner has the misread, candidate has the correct
             if misread in winner_username and correct in candidate:
                 fixed = winner_username.replace(misread, correct, 1)
                 if fixed == candidate:
-                    # Candidate is the corrected version — accept if confidence
-                    # is at least 55% of winner (lower bar because confusion
-                    # corrections are high-value even at lower confidence)
                     if r['confidence'] >= winner_conf * 0.55:
                         return candidate, r['confidence']
 
     return None
 
 
-def ocr_extract_username(img_cv, use_gpu=True):
+def easyocr_cross_validate(img_cv, use_gpu=True):
+    """EasyOCR multi-pass cross-validation (formerly ocr_extract_username).
+    
+    Runs 3 preprocessing variants with weighted voting and consensus detection.
+    Used as cross-validator for VLM primary results.
+    
+    Returns: (username, confidence, diagnostics)
+    """
     reader = get_ocr_reader(use_gpu)
     results_per_variant = []
 
@@ -412,12 +413,10 @@ def ocr_extract_username(img_cv, use_gpu=True):
         if v['count'] >= 3:
             diag['winning_method'] = 'consensus'
             avg_conf = v['total_conf'] / sum(1 for r in results_per_variant if r['username'] == username)
-            # P2.8: Cross-variant dot reconciliation (also for consensus winners)
             dotted = _find_dotted_sibling(username, results_per_variant, avg_conf)
             if dotted:
                 diag['dot_reconciled_from'] = username
                 return dotted[0], dotted[1], diag
-            # P2.9: Cross-variant character confusion correction
             corrected = _find_confusion_correction(username, results_per_variant, avg_conf)
             if corrected:
                 diag['confusion_corrected_from'] = username
@@ -429,13 +428,11 @@ def ocr_extract_username(img_cv, use_gpu=True):
     winner_username = best['username']
     winner_conf = best['confidence']
 
-    # P2.8: Cross-variant dot reconciliation
     dotted = _find_dotted_sibling(winner_username, results_per_variant, winner_conf)
     if dotted:
         diag['dot_reconciled_from'] = winner_username
         winner_username, winner_conf = dotted
 
-    # P2.9: Cross-variant character confusion correction
     corrected = _find_confusion_correction(winner_username, results_per_variant, winner_conf)
     if corrected:
         diag['confusion_corrected_from'] = winner_username
@@ -459,19 +456,73 @@ def check_ollama_available():
         return False, f"Ollama server not running. Start it with: ollama serve\n   Error: {e}"
 
 
-def vlm_extract_username(img_cv):
-    """Extract username from cropped image.
+def is_valid_instagram_format(username):
+    """Validate username against Instagram format rules.
+    
+    Returns True if username follows Instagram conventions:
+    - Length 1-30 characters
+    - Contains at least one alphanumeric
+    - Starts with alphanumeric (not dot/underscore)
+    - Doesn't end with dot
+    - Only contains [a-z0-9._]
+    """
+    if not username or len(username) < 1 or len(username) > 30:
+        return False
+    if not any(c.isalnum() for c in username):
+        return False
+    if not username[0].isalnum():
+        return False
+    if username.endswith('.'):
+        return False
+    if not re.match(r'^[a-z0-9._]+$', username):
+        return False
+    return True
 
-    Sends the raw cropped image (no preprocessing) to the VLM, which reads
-    text holistically — better at preserving underscores and dots that
-    EasyOCR tends to split or drop.
 
-    Returns (username, raw_response) or (None, error_message).
+def has_unusual_pattern(username):
+    """Detect suspicious patterns indicating low OCR confidence.
+    
+    Returns True if username contains patterns that suggest OCR errors:
+    - More than 3 consecutive dots or underscores
+    - More than 50% special characters
+    - No vowels in username >5 chars (likely garbled)
+    - Sequences like "....", "____"
+    """
+    if not username:
+        return True
+    
+    # Excessive consecutive special chars
+    if '....' in username or '____' in username:
+        return True
+    if re.search(r'[._]{4,}', username):
+        return True
+    
+    # Too many special chars relative to alphanumeric
+    special_count = username.count('.') + username.count('_')
+    if len(username) > 0 and special_count / len(username) > 0.5:
+        return True
+    
+    # Long usernames with no vowels (likely garbled)
+    if len(username) > 5:
+        vowels = set('aeiou')
+        if not any(c in vowels for c in username.lower()):
+            return True
+    
+    return False
+
+
+def vlm_primary_extract(img_cv):
+    """VLM primary extraction engine with enhanced confidence scoring.
+    
+    Sends raw cropped image to VLM (no preprocessing). VLM reads text
+    holistically and preserves dots/underscores better than EasyOCR.
+    
+    Returns: (username, confidence, metadata)
     """
     try:
         import ollama
     except ImportError:
-        return None, "ollama not installed"
+        return None, 0, {'error': 'ollama not installed'}
 
     _, buffer = cv2.imencode('.png', img_cv)
     img_bytes = buffer.tobytes()
@@ -482,19 +533,180 @@ def vlm_extract_username(img_cv):
             messages=[{
                 'role': 'user',
                 'content': (
-                    'Read the exact Instagram username shown in this image. '
-                    'Return ONLY the username text, nothing else. '
-                    'No quotes, no explanation, no @ symbol.'
+                    'Extract the Instagram username from this image. '
+                    'The username may contain letters, numbers, dots (.), and underscores (_). '
+                    'Return ONLY the username text with no explanation, quotes, or @ symbol. '
+                    'Preserve all dots and underscores exactly as shown.'
                 ),
                 'images': [img_bytes],
             }],
         )
-        raw = response['message']['content'].strip()
-        raw = raw.strip('`@"\' \n')
-        username = clean_username(raw)
-        return username, raw
+        raw_response = response['message']['content'].strip()
+        raw_response = raw_response.strip('`@"\' \n')
+        username = clean_username(raw_response)
+        
+        if not username:
+            return None, 0, {'raw_response': raw_response, 'error': 'clean_username returned None'}
+        
+        # Calculate VLM confidence
+        base_conf = 85  # VLM baseline
+        
+        # Penalty for hedging language
+        hedging_words = ['appears', 'seems', 'possibly', 'might', 'unclear', 'could be']
+        if any(word in raw_response.lower() for word in hedging_words):
+            base_conf -= 15
+        
+        # Bonus for valid Instagram format
+        if is_valid_instagram_format(username):
+            base_conf += 10
+        
+        # Penalty for unusual patterns
+        if has_unusual_pattern(username):
+            base_conf -= 10
+        
+        confidence = max(60, min(base_conf, 100))
+        
+        metadata = {
+            'raw_response': raw_response,
+            'format_valid': is_valid_instagram_format(username),
+            'unusual_pattern': has_unusual_pattern(username),
+        }
+        
+        return username, confidence, metadata
+        
     except Exception as e:
-        return None, str(e)
+        return None, 0, {'error': str(e)}
+
+
+def _is_dotted_variant(username1, username2):
+    """Check if two usernames differ only by dots.
+    
+    Uses bidirectional checking - either username can have the dots.
+    """
+    return _is_dotted_sibling(username1, username2) or _is_dotted_sibling(username2, username1)
+
+
+def _find_confusion_match(vlm_username, ocr_username):
+    """Check if VLM and OCR differ by a known confusion pattern.
+    
+    Returns (corrected_username, confidence) or None.
+    """
+    if not vlm_username or not ocr_username:
+        return None
+    
+    dist = levenshtein_distance(vlm_username, ocr_username)
+    if dist == 0 or dist > 3:
+        return None
+    
+    # Check both directions
+    for misread, correct in CONFUSION_CORRECTIONS:
+        # VLM has misread, OCR has correct
+        if misread in vlm_username and correct in ocr_username:
+            fixed = vlm_username.replace(misread, correct, 1)
+            if fixed == ocr_username:
+                return ocr_username, 88  # Prefer corrected version
+        
+        # OCR has misread, VLM has correct
+        if misread in ocr_username and correct in vlm_username:
+            fixed = ocr_username.replace(misread, correct, 1)
+            if fixed == vlm_username:
+                return vlm_username, 88  # Prefer corrected version
+    
+    return None
+
+
+def intelligent_consensus_validator(vlm_username, vlm_confidence, vlm_metadata,
+                                     ocr_username, ocr_confidence, ocr_diagnostics):
+    """Intelligently merge VLM and EasyOCR results using multiple strategies.
+    
+    Returns: (final_username, final_confidence, consensus_method, combined_metadata)
+    """
+    metadata = {
+        'vlm': {'username': vlm_username, 'confidence': vlm_confidence, 'metadata': vlm_metadata},
+        'ocr': {'username': ocr_username, 'confidence': ocr_confidence, 'diagnostics': ocr_diagnostics},
+    }
+    
+    # Strategy 1: Exact Agreement (Highest Confidence)
+    if vlm_username == ocr_username:
+        final_conf = max(vlm_confidence, ocr_confidence) + 5
+        final_conf = min(final_conf, 95)
+        metadata['strategy'] = 'exact_agreement'
+        return vlm_username, final_conf, 'exact_agreement', metadata
+    
+    # Strategy 2: Dot/Underscore Reconciliation
+    if _is_dotted_variant(vlm_username, ocr_username):
+        # VLM preserves dots better - prefer VLM version if it has dots
+        if '.' in vlm_username or '_' in vlm_username:
+            final_conf = vlm_confidence + 3
+            metadata['strategy'] = 'dot_reconciled_vlm'
+            return vlm_username, final_conf, 'dot_reconciled_vlm', metadata
+        else:
+            # OCR has dots/underscores, VLM doesn't - unusual but trust OCR
+            final_conf = ocr_confidence + 3
+            metadata['strategy'] = 'dot_reconciled_ocr'
+            return ocr_username, final_conf, 'dot_reconciled_ocr', metadata
+    
+    # Strategy 3: Character Confusion Correction
+    correction = _find_confusion_match(vlm_username, ocr_username)
+    if correction:
+        corrected_user, corrected_conf = correction
+        metadata['strategy'] = 'confusion_corrected'
+        return corrected_user, corrected_conf, 'confusion_corrected', metadata
+    
+    # Strategy 4: Minor Edit Distance (≤2 chars different)
+    edit_dist = levenshtein_distance(vlm_username, ocr_username)
+    metadata['edit_distance'] = edit_dist
+    
+    if edit_dist <= 2:
+        # Prefer longer version (likely preserves more characters)
+        if len(vlm_username) > len(ocr_username):
+            metadata['strategy'] = 'vlm_longer_variant'
+            return vlm_username, vlm_confidence, 'vlm_longer_variant', metadata
+        elif len(ocr_username) > len(vlm_username):
+            metadata['strategy'] = 'ocr_longer_variant'
+            return ocr_username, ocr_confidence, 'ocr_longer_variant', metadata
+        else:
+            # Same length, use higher confidence
+            if vlm_confidence >= ocr_confidence:
+                metadata['strategy'] = 'vlm_confidence_match'
+                return vlm_username, vlm_confidence, 'vlm_confidence_match', metadata
+            else:
+                metadata['strategy'] = 'ocr_confidence_match'
+                return ocr_username, ocr_confidence, 'ocr_confidence_match', metadata
+    
+    # Strategy 5: Significant Disagreement (edit distance >2)
+    if vlm_confidence >= ocr_confidence + 10:
+        # VLM significantly more confident
+        final_conf = max(vlm_confidence - 10, 75)
+        metadata['strategy'] = 'vlm_disagreement_win'
+        return vlm_username, final_conf, 'vlm_disagreement_win', metadata
+    elif ocr_confidence >= vlm_confidence + 10:
+        # OCR significantly more confident
+        final_conf = max(ocr_confidence - 10, 75)
+        metadata['strategy'] = 'ocr_disagreement_win'
+        return ocr_username, final_conf, 'ocr_disagreement_win', metadata
+    else:
+        # Similar confidence, significant disagreement - flag for review
+        # Default to VLM (generally better at special chars)
+        final_conf = max(vlm_confidence - 15, 70)
+        metadata['strategy'] = 'ambiguous_disagreement'
+        return vlm_username, final_conf, 'ambiguous_disagreement', metadata
+
+
+def classify_status(confidence):
+    """Classify extraction status based on confidence score.
+    
+    Stricter tiers than legacy version:
+    - HIGH: >=95% (exact engine agreement or VLM high confidence)
+    - MED: 85-94% (minor differences resolved)
+    - REVIEW: <85% (significant disagreement or low confidence)
+    """
+    if confidence >= 95:
+        return 'verified'
+    elif confidence >= 85:
+        return 'verified'
+    else:
+        return 'review'
 
 
 def clean_username(text):
@@ -520,7 +732,6 @@ def clean_username(text):
         return None
     
     return text
-
 
 
 def levenshtein_distance(s1, s2):
@@ -572,17 +783,6 @@ def calculate_image_quality(img_cv):
     return sharpness * 0.4 + contrast * 0.4 + brightness * 0.2
 
 
-def adjust_confidence(confidence, quality_score):
-    if quality_score < 0.3:
-        adjusted = confidence * (0.5 + quality_score)
-    elif quality_score < 0.5:
-        adjusted = confidence * (0.7 + quality_score * 0.6)
-    else:
-        adjusted = confidence
-    return min(adjusted, 100)
-
-
-
 def extract_username_from_image_parallel(args):
     image_path, image_index, total_images, existing_usernames, use_gpu, diagnostics, use_vlm = args
 
@@ -622,7 +822,7 @@ def extract_username_from_image_parallel(args):
         username_display = result['username']
 
         if result['status'] == 'verified':
-            tier = "HIGH" if result['confidence'] >= 90 else "MED"
+            tier = "HIGH" if result['confidence'] >= 95 else "MED"
             status_icon = "✅"
             detail_text = f" ({result['confidence']:.0f}% {tier})"
 
@@ -636,6 +836,15 @@ def extract_username_from_image_parallel(args):
 
 
 def extract_username_from_image(image_path, use_gpu=True, save_debug=False, use_vlm=False):
+    """Main extraction pipeline with VLM-primary dual-engine architecture.
+    
+    Flow:
+    1. Crop username region
+    2. VLM Primary Extraction
+    3. EasyOCR Cross-Validation (if VLM succeeds)
+    4. Intelligent Consensus Validator
+    5. Classification with stricter tiers (95%/85%)
+    """
     try:
         img_cv = cv2.imread(str(image_path))
         height, width = img_cv.shape[:2]
@@ -655,93 +864,111 @@ def extract_username_from_image(image_path, use_gpu=True, save_debug=False, use_
                 except Exception:
                     pass
 
-        username, confidence, ocr_diag = ocr_extract_username(cropped, use_gpu)
+        quality = calculate_image_quality(cropped)
 
-        if not username:
-            if use_vlm:
-                vlm_username, vlm_raw = vlm_extract_username(cropped)
-                if vlm_username:
-                    username = vlm_username
-                    confidence = 80
-                    ocr_diag['vlm_rescue'] = True
-                    ocr_diag['vlm_raw'] = vlm_raw
-                else:
+        if use_vlm:
+            # VLM-Primary Architecture
+            vlm_username, vlm_confidence, vlm_metadata = vlm_primary_extract(cropped)
+            
+            if save_debug:
+                # Save VLM response for diagnostics
+                vlm_debug_path = DEBUG_DIR / f"{image_path.stem}_vlm_response.txt"
+                with open(vlm_debug_path, 'w', encoding='utf-8') as f:
+                    f.write(f"Username: {vlm_username}\n")
+                    f.write(f"Confidence: {vlm_confidence}\n")
+                    f.write(f"Metadata: {vlm_metadata}\n")
+            
+            if not vlm_username:
+                # VLM failed completely - try EasyOCR fallback
+                ocr_username, ocr_confidence, ocr_diag = easyocr_cross_validate(cropped, use_gpu)
+                
+                if not ocr_username:
+                    # Both engines failed
                     return {
                         'username': None,
                         'confidence': 0,
-                        'verified': False,
                         'status': 'failed',
-                        'quality': 0,
-                        'variants_detail': ocr_diag.get('variants', []),
-                        'winning_method': None,
+                        'method': 'both_failed',
+                        'quality': quality,
+                        'vlm_metadata': vlm_metadata,
+                        'ocr_diagnostics': ocr_diag,
                     }
-            else:
+                
+                # EasyOCR rescue
                 return {
-                    'username': None,
-                    'confidence': 0,
-                    'verified': False,
-                    'status': 'failed',
-                    'quality': 0,
-                    'variants_detail': ocr_diag.get('variants', []),
-                    'winning_method': None,
+                    'username': ocr_username,
+                    'confidence': ocr_confidence,
+                    'status': classify_status(ocr_confidence),
+                    'method': 'ocr_rescue',
+                    'quality': quality,
+                    'ocr_diagnostics': ocr_diag,
                 }
-
-        quality = calculate_image_quality(cropped)
-        raw_confidence = confidence
-        confidence = adjust_confidence(confidence, quality)
-
-        vlm_used = False
-        if use_vlm and not ocr_diag.get('vlm_rescue'):
-            vlm_username, vlm_raw = vlm_extract_username(cropped)
-            ocr_diag['vlm_raw'] = vlm_raw
-            if vlm_username:
-                vlm_used = True
-                if vlm_username == username:
-                    confidence = max(confidence, 90)
-                    ocr_diag['vlm_agreed'] = True
-                else:
-                    dist = levenshtein_distance(vlm_username, username)
-                    if dist <= 2:
-                        if len(vlm_username) > len(username):
-                            ocr_diag['vlm_override'] = True
-                            ocr_diag['vlm_override_from'] = username
-                            username = vlm_username
-                            confidence = max(confidence, 85)
-                        else:
-                            ocr_diag['vlm_deferred'] = True
-                            confidence = max(confidence, 85)
-                    else:
-                        ocr_diag['vlm_override'] = True
-                        ocr_diag['vlm_override_from'] = username
-                        username = vlm_username
-                        confidence = 85
-            else:
-                ocr_diag['vlm_failed'] = True
-
-        if confidence >= 90:
-            status = 'verified'
-        elif confidence >= 80:
-            status = 'verified'
+            
+            # VLM succeeded - run EasyOCR cross-validation
+            ocr_username, ocr_confidence, ocr_diag = easyocr_cross_validate(cropped, use_gpu)
+            
+            if not ocr_username:
+                # EasyOCR failed but VLM succeeded
+                return {
+                    'username': vlm_username,
+                    'confidence': vlm_confidence,
+                    'status': classify_status(vlm_confidence),
+                    'method': 'vlm_only',
+                    'quality': quality,
+                    'vlm_metadata': vlm_metadata,
+                }
+            
+            # Both engines succeeded - run intelligent consensus
+            final_username, final_conf, consensus_method, combined_metadata = \
+                intelligent_consensus_validator(
+                    vlm_username, vlm_confidence, vlm_metadata,
+                    ocr_username, ocr_confidence, ocr_diag
+                )
+            
+            if save_debug:
+                # Save consensus decision for diagnostics
+                import json
+                consensus_path = DEBUG_DIR / f"{image_path.stem}_consensus.json"
+                consensus_data = {
+                    'vlm_result': {'username': vlm_username, 'confidence': vlm_confidence},
+                    'ocr_result': {'username': ocr_username, 'confidence': ocr_confidence},
+                    'edit_distance': combined_metadata.get('edit_distance'),
+                    'strategy': combined_metadata.get('strategy'),
+                    'final_username': final_username,
+                    'final_confidence': final_conf,
+                    'consensus_method': consensus_method,
+                }
+                with open(consensus_path, 'w', encoding='utf-8') as f:
+                    json.dump(consensus_data, f, indent=2)
+            
+            return {
+                'username': final_username,
+                'confidence': final_conf,
+                'status': classify_status(final_conf),
+                'method': consensus_method,
+                'quality': quality,
+                'vlm_result': (vlm_username, vlm_confidence),
+                'ocr_result': (ocr_username, ocr_confidence),
+                'metadata': combined_metadata,
+            }
+        
         else:
-            status = 'review'
-
-        return {
-            'username': username,
-            'confidence': confidence,
-            'verified': None,
-            'status': status,
-            'quality': quality,
-            'raw_confidence': raw_confidence,
-            'variants_detail': ocr_diag.get('variants', []),
-            'winning_method': ocr_diag.get('winning_method'),
-            'vlm_used': vlm_used,
-        }
+            # --no-vlm flag: EasyOCR-only legacy mode
+            ocr_username, ocr_confidence, ocr_diag = easyocr_cross_validate(cropped, use_gpu)
+            
+            return {
+                'username': ocr_username,
+                'confidence': ocr_confidence,
+                'status': classify_status(ocr_confidence),
+                'method': 'ocr_only_legacy',
+                'quality': quality,
+                'ocr_diagnostics': ocr_diag,
+            }
 
     except Exception as e:
         return {
             'username': None,
             'confidence': 0,
-            'verified': False,
             'status': 'error',
             'error': str(e),
             'quality': 0,
@@ -790,7 +1017,7 @@ def append_to_files(new_results, existing_usernames):
             for i, item in enumerate(new_verified, current_count + 1):
                 url = f"https://www.instagram.com/{item['username']}"
                 conf = item['confidence']
-                tier = "HIGH" if conf >= 90 else "MED"
+                tier = "HIGH" if conf >= 95 else "MED"
                 f.write(f"{i}. {item['username']} - {url} [{tier} {conf:.0f}%]\n")
 
         update_file_header(VERIFIED_FILE, current_count + len(new_verified))
@@ -857,7 +1084,7 @@ def update_file_header(file_path, new_total):
         f.writelines(updated_lines)
 
 
-def generate_report(hardware_info, input_dir, results, elapsed_time, new_verified, new_review, vlm_model):
+def generate_report(hardware_info, input_dir, results, elapsed_time, new_verified, new_review, vlm_model, use_vlm):
     total = len(results)
     verified = sum(1 for r in results if r['status'] == 'verified'
                    and not r.get('is_duplicate') and not r.get('is_near_duplicate'))
@@ -866,13 +1093,63 @@ def generate_report(hardware_info, input_dir, results, elapsed_time, new_verifie
     failed = sum(1 for r in results if r['status'] in ['failed', 'error'])
     duplicates = sum(1 for r in results if r.get('is_duplicate', False))
     near_dupes = sum(1 for r in results if r.get('is_near_duplicate', False))
-    high_conf = sum(1 for r in results if r['status'] == 'verified' and r['confidence'] >= 90)
-    med_conf = sum(1 for r in results if r['status'] == 'verified' and 80 <= r['confidence'] < 90)
+    high_conf = sum(1 for r in results if r['status'] == 'verified' and r['confidence'] >= 95)
+    med_conf = sum(1 for r in results if r['status'] == 'verified' and 85 <= r['confidence'] < 95)
 
     extracted = [r for r in results if r['username']]
     avg_confidence = sum(r['confidence'] for r in extracted) / max(1, len(extracted))
     avg_quality = sum(r.get('quality', 0) for r in extracted) / max(1, len(extracted))
     images_per_second = total / elapsed_time if elapsed_time > 0 else 0
+
+    # Engine performance metrics (only if VLM enabled)
+    engine_stats = ""
+    if use_vlm:
+        vlm_successes = sum(1 for r in results if r.get('method') in ['exact_agreement', 'dot_reconciled_vlm', 
+                                                                        'confusion_corrected', 'vlm_longer_variant', 
+                                                                        'vlm_confidence_match', 'vlm_disagreement_win',
+                                                                        'ambiguous_disagreement', 'vlm_only'])
+        ocr_rescues = sum(1 for r in results if r.get('method') == 'ocr_rescue')
+        
+        consensus_methods = defaultdict(int)
+        for r in results:
+            if r.get('method'):
+                consensus_methods[r['method']] += 1
+        
+        vlm_confidences = [r['vlm_result'][1] for r in results if r.get('vlm_result')]
+        ocr_confidences = [r['ocr_result'][1] for r in results if r.get('ocr_result')]
+        
+        vlm_avg = sum(vlm_confidences) / max(1, len(vlm_confidences)) if vlm_confidences else 0
+        ocr_avg = sum(ocr_confidences) / max(1, len(ocr_confidences)) if ocr_confidences else 0
+        
+        # Count dot preservation
+        vlm_dots = sum(1 for r in results if r.get('vlm_result') and ('.' in r['vlm_result'][0] or '_' in r['vlm_result'][0]))
+        ocr_dots = sum(1 for r in results if r.get('ocr_result') and ('.' in r['ocr_result'][0] or '_' in r['ocr_result'][0]))
+        vlm_dots_pct = vlm_dots / max(1, len(vlm_confidences)) * 100 if vlm_confidences else 0
+        ocr_dots_pct = ocr_dots / max(1, len(ocr_confidences)) * 100 if ocr_confidences else 0
+        
+        consensus_breakdown = "\n".join([f"  - {method}: {count} ({count/max(1,total)*100:.1f}%)" 
+                                         for method, count in sorted(consensus_methods.items(), 
+                                                                      key=lambda x: x[1], reverse=True)])
+        
+        engine_stats = f"""
+## Engine Performance (VLM-Primary Architecture)
+
+- **VLM Primary Successes:** {vlm_successes}/{total} ({vlm_successes/max(1,total)*100:.1f}%)
+- **EasyOCR Rescues:** {ocr_rescues}/{total} ({ocr_rescues/max(1,total)*100:.1f}%)
+
+### Consensus Methods Distribution
+
+{consensus_breakdown}
+
+### Engine Comparison
+
+| Metric | VLM | EasyOCR | Final |
+|--------|-----|---------|-------|
+| Avg Confidence | {vlm_avg:.1f}% | {ocr_avg:.1f}% | {avg_confidence:.1f}% |
+| Dot/Underscore Preservation | {vlm_dots_pct:.1f}% | {ocr_dots_pct:.1f}% | - |
+
+---
+"""
 
     report = f"""# Instagram Username Extraction Report
 
@@ -902,8 +1179,8 @@ def generate_report(hardware_info, input_dir, results, elapsed_time, new_verifie
 ## Results Summary
 
 - ✅ **Verified:** {verified} ({verified/max(1,total)*100:.1f}%)
-  - HIGH confidence (>=90%): {high_conf}
-  - MED confidence (80-89%): {med_conf}
+  - HIGH confidence (>=95%): {high_conf}
+  - MED confidence (85-94%): {med_conf}
 - ⚠️ **Needs Review:** {review} ({review/max(1,total)*100:.1f}%)
 - ❌ **Failed:** {failed} ({failed/max(1,total)*100:.1f}%)
 - ⏭️ **Duplicates:** {duplicates} ({duplicates/max(1,total)*100:.1f}%)
@@ -916,7 +1193,7 @@ def generate_report(hardware_info, input_dir, results, elapsed_time, new_verifie
 - **Verified List:** {new_verified} new usernames
 - **Review List:** {new_review} new usernames
 
----
+---{engine_stats}
 
 ## Performance Metrics
 
@@ -930,10 +1207,10 @@ def generate_report(hardware_info, input_dir, results, elapsed_time, new_verifie
 
 ## Pipeline Configuration
 
-- **OCR Engine:** EasyOCR (multi-pass, 3 preprocessing variants)
-- **VLM Model:** {vlm_model}
-- **Preprocessing:** Balanced + Aggressive + Minimal (voting)
-- **Confidence Tiers:** HIGH >=90% | MED >=80% | REVIEW <80%
+- **Architecture:** {'VLM-Primary Dual-Engine' if use_vlm else 'EasyOCR-Only Legacy'}
+- **Primary Engine:** {vlm_model if use_vlm else 'EasyOCR'}
+- **Cross-Validator:** {'EasyOCR (3 preprocessing variants)' if use_vlm else 'N/A'}
+- **Confidence Tiers:** HIGH >=95% | MED >=85% | REVIEW <85%
 - **Near-Duplicate Detection:** Enabled (Levenshtein distance <=2)
 
 ---
@@ -960,11 +1237,11 @@ def main():
     global VLM_MODEL
     
     print("\n" + "="*70)
-    print("Instagram Username Extractor - Universal GPU/CPU Acceleration")
+    print("Instagram Username Extractor - VLM-Primary Dual-Engine")
     print("="*70 + "\n")
     
     input_dir, diagnostics, use_vlm, output_dir, vlm_model = parse_arguments()
-    VLM_MODEL = vlm_model  # Set global VLM_MODEL from command line argument
+    VLM_MODEL = vlm_model
     setup_directories(output_dir)
 
     if not input_dir.exists():
@@ -982,15 +1259,16 @@ def main():
         vlm_ok, vlm_msg = check_ollama_available()
         if vlm_ok:
             hardware_info['optimal_workers'] = min(2, hardware_info['optimal_workers'])
-            print(f"   Workers: {hardware_info['optimal_workers']} parallel processes")
-            print(f"   VLM: ✅ {vlm_msg} (dual-OCR consensus on every image)")
+            print(f"   Workers: {hardware_info['optimal_workers']} (reduced for VLM memory)")
+            print(f"   VLM: ✅ {vlm_msg} (primary engine with EasyOCR cross-validation)")
         else:
             print(f"   Workers: {hardware_info['optimal_workers']} parallel processes")
             print(f"   VLM: ❌ {vlm_msg}")
-            print(f"   Falling back to EasyOCR-only mode.")
+            print(f"   Falling back to EasyOCR-only legacy mode.")
             use_vlm = False
     else:
         print(f"   Workers: {hardware_info['optimal_workers']} parallel processes")
+        print(f"   Mode: EasyOCR-only legacy mode (--no-vlm)")
 
     print()
     
@@ -1016,7 +1294,7 @@ def main():
         for idx, path in enumerate(image_paths, 1)
     ]
     
-    print(f"🚀 Processing {len(image_paths)} images...\n")
+    print(f"🚀 Processing {len(image_paths)} images with {'VLM-primary' if use_vlm else 'EasyOCR-only'} architecture...\n")
     start_time = time.time()
     
     with Pool(processes=hardware_info['optimal_workers']) as pool:
@@ -1027,7 +1305,7 @@ def main():
     print(f"\n💾 Saving results...")
     new_verified, new_review = append_to_files(results, existing_usernames)
     
-    generate_report(hardware_info, input_dir, results, elapsed_time, new_verified, new_review, VLM_MODEL)
+    generate_report(hardware_info, input_dir, results, elapsed_time, new_verified, new_review, VLM_MODEL, use_vlm)
 
     if diagnostics:
         import json
