@@ -1,7 +1,7 @@
 """Instagram Leads to Notion Sync (formerly leads_to_notion.py).
 
 Main orchestration script for validating Instagram usernames and syncing to Notion.
-Handles duplicate detection, validation, batch operations, and deduplication.
+Handles duplicate detection, validation, batch operations, and smart deduplication.
 
 Author: Rahi Khan (Dropout Studio)
 License: MIT
@@ -75,11 +75,10 @@ def run_notion_sync(
     database_id: str,
     skip_validation: bool = False,
     delay: float = 2.0,
-    merge_duplicates: bool = False,
-    keep_strategy: str = "oldest",
-    dry_run_merge: bool = False,
+    auto_deduplicate: bool = True,
+    dry_run_dedup: bool = False,
 ) -> Dict[str, int]:
-    """Run Notion sync workflow.
+    """Run Notion sync workflow with optional deduplication.
     
     Args:
         input_file: Path to markdown file with usernames
@@ -87,23 +86,25 @@ def run_notion_sync(
         database_id: Notion database ID
         skip_validation: Skip Instagram validation
         delay: Delay between Instagram requests
-        merge_duplicates: Merge duplicate entries after sync
-        keep_strategy: 'oldest' or 'newest' when merging
-        dry_run_merge: Preview merge without making changes
+        auto_deduplicate: Automatically deduplicate after sync
+        dry_run_dedup: Preview deduplication without removing
     
     Returns:
         Statistics dictionary with counts
     """
+    logger = logging.getLogger(__name__)
+    
     stats = {
         'added_count': 0,
         'duplicate_count': 0,
         'invalid_count': 0,
-        'merge_stats': None,
+        'dedup_stats': None,
     }
     
     # Load usernames
     usernames = load_usernames_from_markdown(input_file)
     if not usernames:
+        logger.info("ℹ️  No usernames found in input file")
         return stats
     
     # Connect to Notion
@@ -111,11 +112,12 @@ def run_notion_sync(
     existing = notion.get_all_existing_usernames()
     
     # Filter duplicates
-    usernames = [u for u in usernames if u.lower() not in existing]
-    stats['duplicate_count'] = len(usernames) - len(set(u.lower() for u in usernames))
+    unique_usernames = list(set(u.lower() for u in usernames))
+    new_usernames = [u for u in usernames if u.lower() not in existing]
+    stats['duplicate_count'] = len(usernames) - len(unique_usernames)
     
-    if not usernames:
-        logging.info("✅ No new usernames to sync")
+    if not new_usernames:
+        logger.info("✅ No new usernames to sync (all already in Notion)")
     else:
         # Validate on Instagram
         valid_accounts = []
@@ -123,27 +125,28 @@ def run_notion_sync(
         if skip_validation:
             valid_accounts = [
                 {'username': u, 'url': f"https://instagram.com/{u}", 'exists': True}
-                for u in usernames
+                for u in new_usernames
             ]
         else:
             with InstagramValidator(delay_between_requests=delay) as validator:
-                validation_results = validator.validate_batch(usernames)
+                validation_results = validator.validate_batch(new_usernames)
                 valid_accounts = [r for r in validation_results if r['exists']]
-                stats['invalid_count'] = len(usernames) - len(valid_accounts)
+                stats['invalid_count'] = len(new_usernames) - len(valid_accounts)
         
         # Sync to Notion
         if valid_accounts:
             sync_stats = notion.batch_create_pages(valid_accounts, skip_duplicates=False)
             stats['added_count'] = sync_stats['created']
     
-    # Merge duplicates if requested
-    if merge_duplicates:
-        logging.info("\n" + "=" * 70)
-        logging.info("🔄 Merging Duplicates")
-        logging.info("=" * 70)
+    # Run deduplication if requested
+    if auto_deduplicate:
+        logger.info("\n" + "=" * 70)
+        logger.info("🧹 Smart Deduplication")
+        logger.info("=" * 70)
         
-        # Get data_source_id from notion manager
+        # Get data_source_id and property names from notion manager
         data_source_id = notion._get_data_source_id()
+        property_names = notion._detect_property_names()
         
         # Run deduplication
         deduplicator = NotionDeduplicator(
@@ -152,11 +155,24 @@ def run_notion_sync(
             data_source_id
         )
         
-        merge_stats = deduplicator.run_deduplication(
-            keep_strategy=keep_strategy,
-            dry_run=dry_run_merge
+        dedup_stats = deduplicator.deduplicate(
+            property_names=property_names,
+            dry_run=dry_run_dedup
         )
         
-        stats['merge_stats'] = merge_stats
+        stats['dedup_stats'] = dedup_stats
+        
+        # Log results
+        if dry_run_dedup:
+            logger.info(f"\n📊 Deduplication Preview (Dry Run):")
+            logger.info(f"   Duplicate groups found: {dedup_stats['duplicate_groups']}")
+            logger.info(f"   Total duplicates: {dedup_stats['duplicates_found']}")
+            logger.info(f"   💡 Run without --dry-run to remove duplicates")
+        else:
+            logger.info(f"\n✅ Deduplication Complete:")
+            logger.info(f"   Duplicate groups: {dedup_stats['duplicate_groups']}")
+            logger.info(f"   Duplicates removed: {dedup_stats['duplicates_removed']}")
+            if dedup_stats['errors'] > 0:
+                logger.warning(f"   ⚠️  Errors: {dedup_stats['errors']}")
     
     return stats
