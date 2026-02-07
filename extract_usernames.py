@@ -30,6 +30,7 @@ DEBUG_DIR = None
 VERIFIED_FILE = None
 REVIEW_FILE = None
 REPORT_FILE = None
+VLM_MODEL = 'glm-ocr:bf16'  # Default, can be overridden via --vlm-model flag
 
 
 def setup_directories(output_dir=None):
@@ -41,9 +42,6 @@ def setup_directories(output_dir=None):
     VERIFIED_FILE = OUTPUT_DIR / "verified_usernames.md"
     REVIEW_FILE = OUTPUT_DIR / "needs_review.md"
     REPORT_FILE = OUTPUT_DIR / "extraction_report.md"
-
-
-VLM_MODEL = 'glm-ocr:bf16'
 
 
 def detect_hardware():
@@ -90,10 +88,11 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s my_images             # Uses ~/Desktop/my_images
-  %(prog)s /path/to/folder       # Uses absolute path
-  %(prog)s images --output /tmp  # Custom output directory
-  %(prog)s images --no-vlm       # Disable VLM, EasyOCR only
+  %(prog)s my_images                    # Uses ~/Desktop/my_images
+  %(prog)s /path/to/folder              # Uses absolute path
+  %(prog)s images --output /tmp         # Custom output directory
+  %(prog)s images --no-vlm              # Disable VLM, EasyOCR only
+  %(prog)s images --vlm-model minicpm-v:8b-2.6-q8_0  # Use alternative VLM model
         """
     )
 
@@ -116,6 +115,11 @@ Examples:
         action='store_true',
         help='Disable VLM second opinion (EasyOCR only)'
     )
+    parser.add_argument(
+        '--vlm-model',
+        default='glm-ocr:bf16',
+        help='VLM model to use (default: glm-ocr:bf16). Examples: minicpm-v:8b-2.6-q8_0, qwen2.5vl:7b'
+    )
 
     args = parser.parse_args()
     folder_path = Path(args.folder)
@@ -127,7 +131,7 @@ Examples:
 
     use_vlm = not args.no_vlm
 
-    return input_dir, args.diagnostics, use_vlm, args.output
+    return input_dir, args.diagnostics, use_vlm, args.output, args.vlm_model
 
 
 def load_existing_usernames():
@@ -853,7 +857,7 @@ def update_file_header(file_path, new_total):
         f.writelines(updated_lines)
 
 
-def generate_report(hardware_info, input_dir, results, elapsed_time, new_verified, new_review):
+def generate_report(hardware_info, input_dir, results, elapsed_time, new_verified, new_review, vlm_model):
     total = len(results)
     verified = sum(1 for r in results if r['status'] == 'verified'
                    and not r.get('is_duplicate') and not r.get('is_near_duplicate'))
@@ -927,6 +931,7 @@ def generate_report(hardware_info, input_dir, results, elapsed_time, new_verifie
 ## Pipeline Configuration
 
 - **OCR Engine:** EasyOCR (multi-pass, 3 preprocessing variants)
+- **VLM Model:** {vlm_model}
 - **Preprocessing:** Balanced + Aggressive + Minimal (voting)
 - **Confidence Tiers:** HIGH >=90% | MED >=80% | REVIEW <80%
 - **Near-Duplicate Detection:** Enabled (Levenshtein distance <=2)
@@ -952,11 +957,14 @@ def generate_report(hardware_info, input_dir, results, elapsed_time, new_verifie
 
 
 def main():
+    global VLM_MODEL
+    
     print("\n" + "="*70)
     print("Instagram Username Extractor - Universal GPU/CPU Acceleration")
     print("="*70 + "\n")
     
-    input_dir, diagnostics, use_vlm, output_dir = parse_arguments()
+    input_dir, diagnostics, use_vlm, output_dir, vlm_model = parse_arguments()
+    VLM_MODEL = vlm_model  # Set global VLM_MODEL from command line argument
     setup_directories(output_dir)
 
     if not input_dir.exists():
@@ -1019,7 +1027,7 @@ def main():
     print(f"\n💾 Saving results...")
     new_verified, new_review = append_to_files(results, existing_usernames)
     
-    generate_report(hardware_info, input_dir, results, elapsed_time, new_verified, new_review)
+    generate_report(hardware_info, input_dir, results, elapsed_time, new_verified, new_review, VLM_MODEL)
 
     if diagnostics:
         import json
