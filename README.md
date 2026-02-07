@@ -45,18 +45,12 @@ Use our automated setup scripts:
 .\setup.ps1
 ```
 
-Or manually:
-1. Install Python 3.9+ from [python.org](https://www.python.org/downloads/)
-2. Open PowerShell in the repository folder
-3. Run:
-   ```powershell
-   pip install -r requirements.txt
-   ```
-4. Install Ollama from [ollama.com/download](https://ollama.com/download)
-5. Download the AI model:
-   ```powershell
-   ollama pull glm-ocr:bf16
-   ```
+The script will automatically:
+- ✅ Check Python 3.9+ installation
+- ✅ Install all dependencies (~2-3GB download)
+- ✅ Detect/install Ollama
+- ✅ Download GLM-OCR model (~2.2GB)
+- ✅ Validate installation
 
 </details>
 
@@ -69,23 +63,12 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-Or manually:
-1. Install Python 3.9+:
-   ```bash
-   brew install python@3.11
-   ```
-2. Install dependencies:
-   ```bash
-   pip3 install -r requirements.txt
-   ```
-3. Install Ollama:
-   ```bash
-   brew install ollama
-   ```
-4. Download the AI model:
-   ```bash
-   ollama pull glm-ocr:bf16
-   ```
+The script will automatically:
+- ✅ Check Python 3.9+ installation
+- ✅ Install all dependencies (~2-3GB download)
+- ✅ Detect/install Ollama via Homebrew
+- ✅ Download GLM-OCR model (~2.2GB)
+- ✅ Validate installation
 
 </details>
 
@@ -98,29 +81,13 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-Or manually:
-1. Install Python 3.9+:
-   ```bash
-   sudo apt update
-   sudo apt install python3 python3-pip python3-venv
-   ```
-2. Create virtual environment (recommended):
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Install Ollama:
-   ```bash
-   curl -fsSL https://ollama.com/install.sh | sh
-   ```
-5. Download the AI model:
-   ```bash
-   ollama pull glm-ocr:bf16
-   ```
+The script will automatically:
+- ✅ Check Python 3.9+ installation
+- ✅ Offer virtual environment creation (recommended)
+- ✅ Install all dependencies (~2-3GB download)
+- ✅ Detect/install Ollama
+- ✅ Download GLM-OCR model (~2.2GB)
+- ✅ Validate installation
 
 </details>
 
@@ -173,6 +140,9 @@ python extract_usernames.py images --diagnostics
 
 # Run without AI vision model (EasyOCR only)
 python extract_usernames.py images --no-vlm
+
+# Use alternative VLM model
+python extract_usernames.py images --vlm-model minicpm-v:8b-2.6-q8_0
 ```
 
 ### Input Requirements
@@ -252,7 +222,7 @@ The extraction pipeline uses a multi-stage approach:
 - Try `pip3` instead of `pip`
 - Use `--user` flag: `pip install --user -r requirements.txt`
 - Check internet connection
-- Create virtual environment (recommended for Linux)
+- Re-run the setup script for your platform
 
 ### Ollama not running
 **Symptom**: `Ollama server not running`
@@ -323,21 +293,27 @@ ollama pull glm-ocr:bf16
 - Good balance of capabilities
 - Overkill for clean screenshots
 
-### Changing the Model
+### Using Alternative Models
 
-1. **Edit the script** (line 38 in `extract_usernames.py`):
-   ```python
-   VLM_MODEL = 'minicpm-v:8b-2.6-q8_0'  # or your chosen model
-   ```
-
-2. **Download the model**:
+1. **Download the model**:
    ```bash
    ollama pull minicpm-v:8b-2.6-q8_0
+   # or
+   ollama pull qwen2.5vl:7b
    ```
 
-3. **Test with sample images**:
+2. **Run with the model**:
    ```bash
+   python extract_usernames.py my_images --vlm-model minicpm-v:8b-2.6-q8_0
+   ```
+
+3. **Test with sample images** to compare accuracy:
+   ```bash
+   # Default GLM-OCR
    python extract_usernames.py test_images
+   
+   # Alternative model
+   python extract_usernames.py test_images --vlm-model minicpm-v:8b-2.6-q8_0
    ```
 
 > **⚠️ Warning**: Larger models require more VRAM and reduce parallel processing capability (2 workers max vs 6 workers).
@@ -390,7 +366,5 @@ Contributions are welcome! Please follow these guidelines:
 MIT License - See LICENSE file for details.
 
 ---
-
-**Made with ❤️ for the lead generation community**
 
 Having issues? [Open an issue](https://github.com/beyourahi/extract_usernames/issues) • Questions? Check the [FAQ](#-faq) above
