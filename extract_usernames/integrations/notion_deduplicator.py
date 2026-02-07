@@ -154,10 +154,14 @@ class NotionDeduplicator:
             if start_cursor:
                 query_params["start_cursor"] = start_cursor
             
-            response = self.client.data_sources.query(
-                data_source_id=self.data_source_id,
-                **query_params
-            )
+            try:
+                response = self.client.data_sources.query(
+                    data_source_id=self.data_source_id,
+                    **query_params
+                )
+            except Exception as e:
+                self.logger.error(f"Error querying data source: {e}")
+                break
             
             for page in response.get("results", []):
                 page_id = page.get("id")
@@ -166,13 +170,20 @@ class NotionDeduplicator:
                 # Get username (title property)
                 username_prop = props.get(title_prop, {})
                 title_list = username_prop.get("title", [])
-                username = title_list[0].get("plain_text", "").strip() if title_list else ""
+                username = ""
+                if title_list:
+                    username = title_list[0].get("plain_text", "")
+                    # Handle None safely
+                    username = username.strip() if username else ""
                 
-                # Get URL
+                # Get URL - handle None values!
                 url_prop_data = props.get(url_prop, {})
-                url = url_prop_data.get("url", "").strip()
+                url = url_prop_data.get("url")
+                # Convert None to empty string, then strip
+                url = (url or "").strip()
                 
-                if url:  # Only track entries with URLs
+                # Only track entries with URLs
+                if url:
                     url_to_entries[url].append({
                         'page_id': page_id,
                         'username': username,
