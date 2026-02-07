@@ -1,1 +1,1 @@
-""""OCR and VLM processing utilities."""
+"""OCR and VLM processing modules."""
