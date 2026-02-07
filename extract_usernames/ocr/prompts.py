@@ -136,20 +136,33 @@ def prompt_reconfigure_option() -> str:
     click.secho("Reconfigure Settings", fg="cyan", bold=True)
     click.echo("=" * 70)
     
-    choice = click.prompt(
-        "What would you like to change?",
-        type=click.Choice([
-            'all',
-            'directories',
-            'extraction',
-            'notion',
-            'cancel'
-        ], case_sensitive=False),
-        default='all',
-        show_choices=True
-    )
+    # Mapping of shortcuts to full options
+    shortcuts = {
+        'a': 'all',
+        'd': 'directories',
+        'e': 'extraction',
+        'n': 'notion',
+        'c': 'cancel'
+    }
     
-    return choice.lower()
+    valid_options = ['all', 'directories', 'extraction', 'notion', 'cancel']
+    
+    while True:
+        choice = click.prompt(
+            "What would you like to change?\n  [a]ll / [d]irectories / [e]xtraction / [n]otion / [c]ancel",
+            type=str,
+            default='all',
+            show_default=True
+        ).lower().strip()
+        
+        # Map shortcut to full option
+        if choice in shortcuts:
+            return shortcuts[choice]
+        elif choice in valid_options:
+            return choice
+        else:
+            click.secho(f"  ❌ Invalid option: '{choice}'", fg="red")
+            click.echo(f"  Please choose: {', '.join(valid_options)} (or use first letter)\n")
 
 
 def reconfigure_directories(config: Dict[str, Any]) -> Dict[str, Any]:
