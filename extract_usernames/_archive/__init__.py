@@ -1,1 +1,1 @@
-"""Archived legacy code - preserved for reference."""
+"""Archived legacy code - kept for reference only."""
