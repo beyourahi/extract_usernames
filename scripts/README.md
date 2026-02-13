@@ -4,59 +4,88 @@ Installation scripts that check your Python version, install the package, and gu
 
 ---
 
-## Install on macOS / Linux
+## Installation
+
+**All Platforms (macOS, Linux, WSL, Git Bash):**
 
 ```bash
 cd extract_usernames
 ./scripts/setup.sh
 ```
 
-If you get a permission error, make the script executable first:
+If you get a permission error:
 ```bash
 chmod +x scripts/setup.sh
 ./scripts/setup.sh
 ```
 
-## Install on Windows
+**Windows Users:**
 
-```powershell
-cd extract_usernames
-.\scripts\setup.ps1
-```
+This script requires either:
+- **WSL (Windows Subsystem for Linux)**: [Install Guide](https://docs.microsoft.com/windows/wsl/install)
+- **Git Bash**: [Download](https://gitforwindows.org)
 
-If PowerShell blocks the script, allow it to run for this session:
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\scripts\setup.ps1
+After installing WSL or Git Bash, run the setup script as shown above.
+
+**Advanced Options:**
+```bash
+./scripts/setup.sh --help              # Show all options
+./scripts/setup.sh --skip-ollama       # EasyOCR-only mode
+./scripts/setup.sh --verbose           # Detailed output
+./scripts/setup.sh --dry-run           # Preview without executing
 ```
 
 ---
 
-## What These Scripts Do
+## Platform Detection
 
-Both platform scripts perform these steps:
+The unified setup script automatically detects:
+- **macOS** (Intel and Apple Silicon)
+- **Linux distributions** (Ubuntu, Debian, Fedora, RHEL, Arch)
+- **Windows Subsystem for Linux (WSL)**
+- **Git Bash for Windows**
 
-1. Check Python 3.9 or later is installed (required for the package)
-2. Install the package with `pip install -e .` (editable mode for development)
-3. Check if Ollama is available (optional)
-4. Download GLM-OCR model (~2.2GB) if Ollama exists
-5. Validate the CLI command works (`extract-usernames --version`)
+For native Windows PowerShell/CMD, the script provides installation instructions for WSL or Git Bash.
 
-The scripts guide you through any missing requirements. If Ollama is not installed, the tool falls back to EasyOCR (no manual intervention needed).
+---
+
+## What the Setup Script Does
+
+The unified setup script performs these steps:
+
+1. **Detect Platform**: Automatically identifies your OS (macOS, Linux, WSL, Git Bash)
+2. **Check Python**: Validates Python 3.9+ is installed (tries `python3` then `python`)
+3. **Install Package**: Runs `pip install -e .` (editable mode for development)
+4. **Setup Ollama**: Checks if Ollama is available (optional)
+5. **Download Model**: Pulls GLM-OCR model (~2.2GB) if Ollama exists
+6. **Validate CLI**: Tests the `extract-usernames` command
+
+The script guides you through any missing requirements with platform-specific installation instructions. If Ollama is not installed, the tool falls back to EasyOCR automatically (no manual intervention needed).
+
+**Command-Line Flags:**
+- `--skip-ollama` - Skip Ollama installation and model download (EasyOCR-only mode)
+- `--skip-model` - Install Ollama but skip model download
+- `--verbose` - Show detailed output during installation
+- `--dry-run` - Preview installation steps without executing
+- `--help` - Display usage information
 
 ---
 
 ## Files
 
 ### setup.sh
-**Platform:** macOS, Linux, Unix-like systems
+**Platform:** macOS, Linux, WSL, Git Bash (Universal)
 
-Checks your Python version, installs the package, and guides you through Ollama setup if available. Uses colored output for readability.
+Universal setup script with intelligent platform detection. Checks Python version, installs the package, and guides you through Ollama setup with platform-specific instructions. Features colored output, command-line flags, and comprehensive error handling.
+
+**Version:** 3.0.0
 
 ### setup.ps1
-**Platform:** Windows (PowerShell 5.0+)
+**Platform:** Windows PowerShell (DEPRECATED)
 
-Windows-native version with colored output and the same setup steps as `setup.sh`. Includes Windows-specific error handling.
+⚠️ **Deprecated as of 2026-02-13. Will be removed in August 2026.**
+
+Legacy Windows-native setup script. Windows users should now use `setup.sh` via WSL or Git Bash instead. This file remains for backward compatibility only and displays an interactive deprecation warning when run.
 
 ### setup.py
 **Purpose:** Package configuration file
@@ -138,12 +167,36 @@ chmod +x scripts/setup.sh
 
 ---
 
-**"Script cannot be loaded because running scripts is disabled"**
+**"Setup script not working on Windows"**
 
-Allow the script to run for this session:
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\scripts\setup.ps1
+The unified setup script requires WSL or Git Bash. Native PowerShell/CMD are not supported.
+
+Install one of these Unix-like environments:
+- **WSL (Recommended)**: `wsl --install` in PowerShell (requires Windows 10/11)
+- **Git Bash**: Download from [gitforwindows.org](https://gitforwindows.org)
+
+After installation, run the setup script in WSL or Git Bash terminal.
+
+---
+
+**WSL-specific: "Command not found" errors**
+
+If commands work in WSL but not in Windows terminal:
+1. WSL and Windows have separate environments
+2. Run `extract-usernames` from within the WSL terminal
+3. Access Windows files via `/mnt/c/Users/...` paths
+
+---
+
+**Git Bash-specific: Path issues**
+
+Git Bash supports both Unix and Windows path formats:
+```bash
+# Unix-style (preferred)
+./scripts/setup.sh
+
+# Windows-style (also works)
+C:/Users/yourname/extract_usernames/scripts/setup.sh
 ```
 
 ---

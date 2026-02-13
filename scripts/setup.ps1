@@ -1,6 +1,36 @@
 # Instagram Username Extractor - Modern Setup Script
 # One-command installation with pip install -e .
 
+# DEPRECATED: This script is deprecated as of 2026-02-13
+#
+# Please use the unified setup.sh script via WSL or Git Bash instead:
+#
+#   WSL Installation: https://docs.microsoft.com/windows/wsl/install
+#   Git Bash: https://gitforwindows.org
+#
+# After installing WSL or Git Bash, run:
+#   ./scripts/setup.sh
+#
+# This file will be removed in a future version (target: August 2026).
+# For now, it remains for backward compatibility only.
+
+Write-Host "`n======================================== " -ForegroundColor Yellow
+Write-Host "⚠️  DEPRECATION WARNING ⚠️" -ForegroundColor Yellow
+Write-Host "========================================`n" -ForegroundColor Yellow
+Write-Host "This PowerShell setup script is deprecated." -ForegroundColor Yellow
+Write-Host "Please use setup.sh via WSL or Git Bash instead.`n" -ForegroundColor Yellow
+Write-Host "Installation options:" -ForegroundColor Cyan
+Write-Host "  1. WSL (Recommended): https://docs.microsoft.com/windows/wsl/install" -ForegroundColor White
+Write-Host "  2. Git Bash: https://gitforwindows.org`n" -ForegroundColor White
+
+$continue = Read-Host "Continue with deprecated script? (y/N)"
+if ($continue -ne "y" -and $continue -ne "Y") {
+    Write-Host "`nSetup cancelled. Please install WSL or Git Bash.`n" -ForegroundColor Yellow
+    exit 0
+}
+
+Write-Host "`nProceeding with deprecated setup...`n" -ForegroundColor Gray
+
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "Instagram Username Extractor - Setup" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan

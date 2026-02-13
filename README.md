@@ -15,12 +15,18 @@ Extracts Instagram usernames from screenshots using OCR (optical character recog
 # Clone and install
 git clone https://github.com/beyourahi/extract_usernames.git
 cd extract_usernames
-./scripts/setup.sh      # macOS/Linux
-# or
-.\scripts\setup.ps1     # Windows
+./scripts/setup.sh  # macOS, Linux, WSL, Git Bash
 
 # Run the extractor
 extract-usernames
+```
+
+**Windows users:** Install [WSL](https://docs.microsoft.com/windows/wsl/install) or [Git Bash](https://gitforwindows.org) first, then run the script above.
+
+**Advanced options:**
+```bash
+./scripts/setup.sh --skip-ollama  # EasyOCR-only mode
+./scripts/setup.sh --help         # Show all options
 ```
 
 The first run asks for your screenshot folder and output preferences. These settings are saved to `~/.config/extract-usernames/config.json` for future runs.
@@ -29,6 +35,19 @@ Update settings anytime:
 ```bash
 extract-usernames --reconfigure
 ```
+
+### Platform Support
+
+The setup script automatically detects your platform and provides appropriate installation instructions:
+
+| Platform | Package Manager | Ollama Installation |
+|----------|-----------------|---------------------|
+| macOS | Homebrew | `brew install ollama` |
+| Ubuntu/Debian | apt | curl script |
+| Fedora/RHEL | dnf/yum | curl script |
+| Arch Linux | pacman | curl script |
+| WSL (Windows) | apt | curl script |
+| Git Bash (Windows) | manual | download from ollama.com |
 
 ---
 
