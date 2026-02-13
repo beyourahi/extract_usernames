@@ -1,22 +1,32 @@
 # Setup Scripts
 
-Automated installation scripts for Instagram Username Extractor across different platforms.
+Installation scripts that check your Python version, install the package, and guide you through Ollama setup if available.
 
 ---
 
-## Quick Start
-
-### macOS / Linux
+## Install on macOS / Linux
 
 ```bash
 cd extract_usernames
 ./scripts/setup.sh
 ```
 
-### Windows (PowerShell)
+If you get a permission error, make the script executable first:
+```bash
+chmod +x scripts/setup.sh
+./scripts/setup.sh
+```
+
+## Install on Windows
 
 ```powershell
 cd extract_usernames
+.\scripts\setup.ps1
+```
+
+If PowerShell blocks the script, allow it to run for this session:
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\scripts\setup.ps1
 ```
 
@@ -24,76 +34,55 @@ cd extract_usernames
 
 ## What These Scripts Do
 
-All setup scripts perform the following steps:
+Both platform scripts perform these steps:
 
-1. **✅ Check Python** - Verifies Python 3.9+ is installed
-2. **📦 Install Package** - Installs the tool with `pip install -e .`
-3. **🤖 Check Ollama** - Verifies Ollama installation (optional but recommended)
-4. **💾 Download Model** - Pulls GLM-OCR model (~2.2GB) if Ollama is available
-5. **✅ Validate** - Confirms CLI is accessible via `extract-usernames` command
+1. Check Python 3.9 or later is installed (required for the package)
+2. Install the package with `pip install -e .` (editable mode for development)
+3. Check if Ollama is available (optional)
+4. Download GLM-OCR model (~2.2GB) if Ollama exists
+5. Validate the CLI command works (`extract-usernames --version`)
+
+The scripts guide you through any missing requirements. If Ollama is not installed, the tool falls back to EasyOCR (no manual intervention needed).
 
 ---
 
 ## Files
 
 ### setup.sh
-**Platform:** macOS, Linux, Unix-like systems  
-**Requirements:** Bash shell
+**Platform:** macOS, Linux, Unix-like systems
 
-```bash
-chmod +x scripts/setup.sh
-./scripts/setup.sh
-```
-
-**Features:**
-- Colored output for better readability
-- Automatic Python version detection
-- Ollama installation guidance
-- Error handling with clear messages
-
----
+Checks your Python version, installs the package, and guides you through Ollama setup if available. Uses colored output for readability.
 
 ### setup.ps1
-**Platform:** Windows  
-**Requirements:** PowerShell 5.0+
+**Platform:** Windows (PowerShell 5.0+)
 
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\scripts\setup.ps1
-```
-
-**Features:**
-- Windows-native colored output
-- Python version validation
-- Ollama installation guidance
-- Error handling with exit codes
-
----
+Windows-native version with colored output and the same setup steps as `setup.sh`. Includes Windows-specific error handling.
 
 ### setup.py
-**Purpose:** Python package configuration (used by `pip install`)  
-**Note:** Not meant to be run directly - called by pip during installation
+**Purpose:** Package configuration file
+
+Called by pip during installation (`pip install -e .`). Not run directly.
 
 Defines:
-- Package metadata
+- Package metadata (name, version, author)
 - Dependencies from `requirements.txt`
-- Entry point: `extract-usernames` CLI command
-- Python version requirements (>=3.9)
+- Entry point for the `extract-usernames` CLI command
+- Python version requirement (3.9 or later)
 
 ---
 
 ## Manual Installation
 
-If you prefer manual setup:
+If you prefer manual setup or need more control:
 
-### 1. Install Python Dependencies
+### 1. Install the Package
 
 ```bash
 cd extract_usernames
 pip install -e .
 ```
 
-### 2. Install Ollama (Optional but Recommended)
+### 2. Install Ollama (Optional)
 
 **macOS:**
 ```bash
@@ -112,7 +101,7 @@ ollama pull glm-ocr:bf16
 **Windows:**
 1. Download from [ollama.com/download](https://ollama.com/download)
 2. Install and run Ollama
-3. Open terminal:
+3. In your terminal:
    ```
    ollama pull glm-ocr:bf16
    ```
@@ -127,72 +116,96 @@ extract-usernames --version
 
 ## Troubleshooting
 
-### Python Not Found
+**"python3: command not found" or version too old**
 
-**macOS/Linux:**
+Install Python 3.9 or later:
 ```bash
-# Install Python 3.9+
 brew install python@3.11  # macOS
 sudo apt install python3   # Ubuntu/Debian
 ```
 
-**Windows:**
-- Download from [python.org/downloads](https://www.python.org/downloads/)
-- Ensure "Add Python to PATH" is checked during installation
+Windows: Download from [python.org/downloads](https://www.python.org/downloads/) and check "Add Python to PATH" during installation.
 
-### Permission Denied (setup.sh)
+---
 
+**"Permission denied" when running setup.sh**
+
+Make the script executable:
 ```bash
 chmod +x scripts/setup.sh
 ./scripts/setup.sh
 ```
 
-### PowerShell Execution Policy Error
+---
 
+**"Script cannot be loaded because running scripts is disabled"**
+
+Allow the script to run for this session:
 ```powershell
-# Allow script execution for current session
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\scripts\setup.ps1
 ```
 
-### Ollama Not Starting
+---
 
-**macOS/Linux:**
+**Ollama won't start or connect**
+
+macOS/Linux - Check if Ollama is running:
 ```bash
-# Check if Ollama is running
 pgrep ollama
+```
 
-# Start Ollama manually
+If not running, start it manually:
+```bash
 ollama serve &
 ```
 
-**Windows:**
-- Check if Ollama is running in system tray
-- Restart Ollama application
+Windows - Check the system tray for the Ollama icon. If not running, restart the Ollama application.
 
-### CLI Not Found After Installation
+---
 
+**"extract-usernames: command not found" after installation**
+
+Reload your shell configuration:
 ```bash
-# Reload shell configuration
 source ~/.bashrc   # or ~/.zshrc
-
-# Or restart terminal
 ```
+
+Or restart your terminal.
+
+---
+
+## Post-Installation
+
+After setup completes:
+
+1. Run the setup wizard to configure input/output directories:
+   ```bash
+   extract-usernames
+   ```
+
+2. Place screenshots in the configured directory (default: `~/Desktop/screenshots/`)
+
+3. Run extraction:
+   ```bash
+   extract-usernames
+   ```
+
+4. (Optional) Configure Notion integration:
+   ```bash
+   extract-usernames --reconfigure
+   ```
 
 ---
 
 ## Development
 
-### Installing from Source for Development
+Installing from source for development work:
 
 ```bash
 git clone https://github.com/beyourahi/extract_usernames.git
 cd extract_usernames
-
-# Install in editable mode with dev dependencies
 pip install -e ".[dev]"
-
-# Verify
 extract-usernames --version
 ```
 
@@ -200,43 +213,18 @@ extract-usernames --version
 
 ## Environment Variables
 
-Optional environment variables for advanced configuration:
+Advanced configuration options:
 
 ```bash
 # Custom Python binary
 export PYTHON_BIN=/usr/local/bin/python3.11
 
-# Skip Ollama model download
+# Skip Ollama model download during setup
 export SKIP_OLLAMA_PULL=1
 
 # Custom pip options
 export PIP_OPTIONS="--no-cache-dir --quiet"
 ```
-
----
-
-## Post-Installation
-
-After running setup scripts:
-
-1. **Configure Tool:**
-   ```bash
-   extract-usernames  # First run starts setup wizard
-   ```
-
-2. **Place Screenshots:**
-   - Default: `~/Desktop/screenshots/`
-   - Or configure custom path during setup
-
-3. **Run Extraction:**
-   ```bash
-   extract-usernames
-   ```
-
-4. **Optional - Setup Notion:**
-   ```bash
-   extract-usernames --reconfigure notion
-   ```
 
 ---
 
@@ -246,7 +234,7 @@ After running setup scripts:
 # Remove package
 pip uninstall instagram-username-extractor
 
-# Remove configuration
+# Remove configuration files
 rm -rf ~/.config/extract-usernames
 
 # Remove Ollama model (optional)
@@ -257,8 +245,8 @@ ollama rm glm-ocr:bf16
 
 ## Support
 
-For issues with setup scripts:
+For setup issues:
 
-1. Check [Troubleshooting](#troubleshooting) section above
-2. Review [main README.md](../README.md) for general help
+1. Check the troubleshooting section above
+2. Review the [main README.md](../README.md) for general help
 3. Open an issue on [GitHub](https://github.com/beyourahi/extract_usernames/issues)
