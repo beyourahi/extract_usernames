@@ -4,7 +4,7 @@
 
 **NEVER CREATE BRANCHES.** Direct commits to main. No feature branches, no development branches.
 
-**Conventional Commits:** `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `style:`, `perf:`
+**Conventional Commits:** `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`, `style:`, `perf:`
 
 **Git Safety:**
 - NEVER commit/push without permission
@@ -189,15 +189,9 @@ cd extract_usernames
 5. Batch create pages
 6. Auto-deduplicate (default) - smart scoring algorithm keeps best username, archives duplicates
 
-**Smart Deduplication:** Groups by URL, scores usernames (-1000 for malformed like "1.", rewards letters/lowercase/length), keeps highest score, archives rest. See `docs/DEDUPLICATION.md` for details.
+**Smart Deduplication:** Groups by URL, scores usernames (-1000 for malformed like "1.", rewards letters/lowercase/length), keeps highest score, archives rest.
 
 **API:** `extract_usernames.integrations.notion_manager.NotionDatabaseManager`, `extract_usernames.integrations.instagram_validator.InstagramValidator`, `extract_usernames.integrations.notion_deduplicator.run_deduplication()`
-
----
-
-## Testing
-
-No automated tests. Manual validation: setup wizard, config save/load, CLI flags, VLM/EasyOCR accuracy, Notion sync/deduplication, cross-platform compatibility.
 
 ---
 
@@ -228,7 +222,6 @@ No automated tests. Manual validation: setup wizard, config save/load, CLI flags
 ## Documentation References
 
 **Extended guides:**
-- `docs/DEDUPLICATION.md` - Smart deduplication algorithm, scoring, safety features
 - `README.md` - Installation, usage examples, benchmarks, Notion setup
 - `CONTRIBUTING.md` - Contribution guidelines
 

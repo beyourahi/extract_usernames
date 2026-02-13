@@ -11,7 +11,6 @@ Thank you for considering contributing to this project! This guide will help you
 - [Development Setup](#development-setup)
 - [Project Structure](#project-structure)
 - [Coding Standards](#coding-standards)
-- [Testing](#testing)
 - [Submitting Changes](#submitting-changes)
 - [Reporting Bugs](#reporting-bugs)
 - [Suggesting Enhancements](#suggesting-enhancements)
@@ -57,10 +56,8 @@ We actively welcome pull requests:
 
 1. Fork the repo and create your branch from `main`
 2. Make your changes
-3. Add tests if applicable
-4. Update documentation
-5. Ensure tests pass
-6. Submit pull request
+3. Update documentation
+4. Submit pull request
 
 ---
 
@@ -138,9 +135,7 @@ extract_usernames/
 │   └── _archive/              # Legacy code
 │       └── extract_usernames.py
 │
-├── scripts/                   # Setup scripts
-├── tests/                     # Test suite
-└── docs/                      # Documentation
+└── scripts/                   # Setup scripts
 ```
 
 ### Key Components
@@ -226,48 +221,6 @@ def process_image(path: Path, model: str = 'glm-ocr') -> dict:
 
 ---
 
-## Testing
-
-### Running Tests
-
-```bash
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=extract_usernames
-
-# Run specific test file
-pytest tests/test_cli.py
-
-# Run specific test
-pytest tests/test_cli.py::test_version
-```
-
-### Writing Tests
-
-- Place tests in `tests/` directory
-- Name test files `test_*.py`
-- Name test functions `test_*`
-- Use pytest fixtures for setup
-
-```python
-import pytest
-from extract_usernames.config import ConfigManager
-
-def test_config_save_and_load(tmp_path):
-    """Test config persistence."""
-    config = {'input_dir': '/test'}
-    manager = ConfigManager(config_dir=tmp_path)
-    
-    manager.save(config)
-    loaded = manager.load()
-    
-    assert loaded == config
-```
-
----
-
 ## Submitting Changes
 
 ### Workflow
@@ -279,27 +232,20 @@ def test_config_save_and_load(tmp_path):
 
 2. **Make your changes**
    - Write code
-   - Add tests
    - Update docs
 
-3. **Test your changes**
-   ```bash
-   pytest
-   extract-usernames --version  # Smoke test
-   ```
-
-4. **Commit your changes**
+3. **Commit your changes**
    ```bash
    git add .
    git commit -m "Add amazing feature"
    ```
 
-5. **Push to your fork**
+4. **Push to your fork**
    ```bash
    git push origin feature/amazing-feature
    ```
 
-6. **Open a Pull Request**
+5. **Open a Pull Request**
    - Go to GitHub and create PR
    - Fill in PR template
    - Link related issues
@@ -313,7 +259,7 @@ Add feature to validate Instagram profiles
 
 - Implement HTTP client for Instagram API
 - Add rate limiting and retry logic
-- Update tests and documentation
+- Update documentation
 
 Closes #42
 ```
@@ -327,7 +273,6 @@ Closes #42
 ### Pull Request Guidelines
 
 **Before submitting:**
-- [ ] Tests pass (`pytest`)
 - [ ] Code follows style guide
 - [ ] Documentation updated
 - [ ] Commit messages are clear
@@ -344,12 +289,8 @@ Brief description of changes
 - [ ] Breaking change
 - [ ] Documentation update
 
-## Testing
-How was this tested?
-
 ## Checklist
 - [ ] Code follows style guide
-- [ ] Tests added/updated
 - [ ] Documentation updated
 - [ ] No breaking changes (or documented)
 ```
@@ -362,7 +303,7 @@ How was this tested?
 
 1. Check [existing issues](https://github.com/beyourahi/extract_usernames/issues)
 2. Try latest version from `main` branch
-3. Test with diagnostics mode: `extract-usernames --diagnostics`
+3. Run with diagnostics mode: `extract-usernames --diagnostics`
 
 ### Bug Report Template
 
@@ -426,9 +367,9 @@ Mockups, examples, references, etc.
 ### Good First Issues
 
 - Documentation improvements
-- Adding tests
 - Fixing typos
 - Improving error messages
+- Adding examples
 
 ### Wanted Features
 
