@@ -12,6 +12,7 @@ easyocr>=1.7.0
 # Image preprocessing and manipulation
 opencv-python>=4.8.0,<5.0.0
 Pillow>=10.0.0
+pillow-avif-plugin
 
 # Array operations for image processing
 numpy>=1.24.0

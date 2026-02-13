@@ -19,6 +19,7 @@ import easyocr
 import torch
 from datetime import datetime
 from multiprocessing import Pool, cpu_count
+from PIL import Image
 
 
 TOP_OFFSET = 165
@@ -858,6 +859,22 @@ def extract_username_from_image(image_path, use_gpu=True, save_debug=False, use_
         bottom = top + CROP_HEIGHT
 
         cropped = img_cv[top:bottom, left:right]
+
+        # Save cropped region in AVIF format for LLM processing
+        try:
+            crops_dir = OUTPUT_DIR / "cropped_usernames_images"
+            crops_dir.mkdir(parents=True, exist_ok=True)
+
+            # Convert BGR (OpenCV) to RGB (PIL)
+            crop_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(crop_rgb)
+
+            # Save as AVIF with quality 75 (optimal balance for LLM visual processing)
+            avif_path = crops_dir / f"{image_path.stem}_crop.avif"
+            pil_img.save(avif_path, format='AVIF', quality=75)
+        except Exception:
+            # Silently continue if AVIF save fails (don't break extraction pipeline)
+            pass
 
         if save_debug:
             cv2.imwrite(str(DEBUG_DIR / f"{image_path.stem}_crop.png"), cropped)

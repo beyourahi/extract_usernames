@@ -52,6 +52,7 @@ needs_review.md
 extraction_report.md
 debug/
 diagnostics/
+cropped_usernames_images/
 
 # Environment variables
 .env

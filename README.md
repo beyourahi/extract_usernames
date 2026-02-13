@@ -263,6 +263,22 @@ Detailed performance metrics:
 - Mode: VLM-Primary (GLM-OCR)
 ```
 
+### cropped_usernames_images/ (Directory)
+**New in v2.0:** Cropped username regions saved in AVIF format for quality assurance and LLM batch processing:
+
+```
+cropped_usernames_images/
+├── screenshot_001_crop.avif
+├── screenshot_002_crop.avif
+└── ...
+```
+
+**Features:**
+- **Always saved** (regardless of diagnostics mode)
+- **AVIF format** with quality 75 - optimal balance of text clarity and file size (50-80% smaller than PNG)
+- **One file per screenshot** - enables visual verification and LLM-based quality checks
+- **Non-blocking** - pipeline continues even if AVIF save fails
+
 ---
 
 ## Configuration File
