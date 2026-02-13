@@ -97,7 +97,8 @@ def run_extraction(
     # Prepare arguments for parallel processing
     use_gpu = hardware_info['gpu_available']
     args_list = [
-        (path, idx, len(image_paths), existing_usernames, use_gpu, diagnostics, use_vlm)
+        (path, idx, len(image_paths), existing_usernames, use_gpu, diagnostics, use_vlm,
+         str(extractor.OUTPUT_DIR), str(extractor.DEBUG_DIR), vlm_model)
         for idx, path in enumerate(image_paths, 1)
     ]
     

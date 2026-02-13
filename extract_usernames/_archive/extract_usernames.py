@@ -20,6 +20,13 @@ import torch
 from datetime import datetime
 from multiprocessing import Pool, cpu_count
 from PIL import Image
+import sys
+
+# Guard for AVIF support on older Pillow versions
+try:
+    import pillow_avif  # noqa: F401
+except ImportError:
+    pass  # Pillow >= 10.1.0 has native AVIF support
 
 
 TOP_OFFSET = 165
@@ -515,7 +522,7 @@ def has_unusual_pattern(username):
     return False
 
 
-def vlm_primary_extract(img_cv):
+def vlm_primary_extract(img_cv, vlm_model=None):
     """VLM primary extraction engine with enhanced confidence scoring.
     
     Sends raw cropped image to VLM (no preprocessing). VLM reads text
@@ -533,7 +540,7 @@ def vlm_primary_extract(img_cv):
 
     try:
         response = ollama.chat(
-            model=VLM_MODEL,
+            model=vlm_model or VLM_MODEL,
             messages=[{
                 'role': 'user',
                 'content': (
@@ -788,9 +795,10 @@ def calculate_image_quality(img_cv):
 
 
 def extract_username_from_image_parallel(args):
-    image_path, image_index, total_images, existing_usernames, use_gpu, diagnostics, use_vlm = args
+    image_path, image_index, total_images, existing_usernames, use_gpu, diagnostics, use_vlm, output_dir, debug_dir, vlm_model = args
 
-    result = extract_username_from_image(image_path, use_gpu, save_debug=diagnostics, use_vlm=use_vlm)
+    result = extract_username_from_image(image_path, use_gpu, save_debug=diagnostics, use_vlm=use_vlm,
+                                         output_dir=output_dir, debug_dir=debug_dir, vlm_model=vlm_model)
     result['filename'] = image_path.name
     result['index'] = image_index
     result['is_duplicate'] = False
@@ -839,9 +847,10 @@ def extract_username_from_image_parallel(args):
     return result
 
 
-def extract_username_from_image(image_path, use_gpu=True, save_debug=False, use_vlm=False):
+def extract_username_from_image(image_path, use_gpu=True, save_debug=False, use_vlm=False,
+                                output_dir=None, debug_dir=None, vlm_model=None):
     """Main extraction pipeline with VLM-primary dual-engine architecture.
-    
+
     Flow:
     1. Crop username region
     2. VLM Primary Extraction
@@ -849,6 +858,11 @@ def extract_username_from_image(image_path, use_gpu=True, save_debug=False, use_
     4. Intelligent Consensus Validator
     5. Classification with stricter tiers (95%/85%)
     """
+    # Resolve params with fallback to globals for backward compat
+    _output_dir = Path(output_dir) if output_dir else OUTPUT_DIR
+    _debug_dir = Path(debug_dir) if debug_dir else DEBUG_DIR
+    _vlm_model = vlm_model if vlm_model else VLM_MODEL
+
     try:
         img_cv = cv2.imread(str(image_path))
         height, width = img_cv.shape[:2]
@@ -862,25 +876,27 @@ def extract_username_from_image(image_path, use_gpu=True, save_debug=False, use_
 
         # Save cropped region in AVIF format for LLM processing
         try:
-            crops_dir = OUTPUT_DIR / "cropped_usernames_images"
-            crops_dir.mkdir(parents=True, exist_ok=True)
+            if _output_dir is None:
+                print(f"[WARN] AVIF crop: output_dir not set, skipping crop save for {image_path.name}", file=sys.stderr)
+            else:
+                crops_dir = _output_dir / "cropped_usernames_images"
+                crops_dir.mkdir(parents=True, exist_ok=True)
 
-            # Convert BGR (OpenCV) to RGB (PIL)
-            crop_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
-            pil_img = Image.fromarray(crop_rgb)
+                # Convert BGR (OpenCV) to RGB (PIL)
+                crop_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(crop_rgb)
 
-            # Save as AVIF with quality 75 (optimal balance for LLM visual processing)
-            avif_path = crops_dir / f"{image_path.stem}_crop.avif"
-            pil_img.save(avif_path, format='AVIF', quality=75)
-        except Exception:
-            # Silently continue if AVIF save fails (don't break extraction pipeline)
-            pass
+                # Save as AVIF with quality 75 (optimal balance for LLM visual processing)
+                avif_path = crops_dir / f"{image_path.stem}_crop.avif"
+                pil_img.save(avif_path, format='AVIF', quality=75)
+        except Exception as e:
+            print(f"[WARN] AVIF crop save failed for {image_path.name}: {e}", file=sys.stderr)
 
-        if save_debug:
-            cv2.imwrite(str(DEBUG_DIR / f"{image_path.stem}_crop.png"), cropped)
+        if save_debug and _debug_dir is not None:
+            cv2.imwrite(str(_debug_dir / f"{image_path.stem}_crop.png"), cropped)
             for vname, vfunc in PREPROCESS_VARIANTS:
                 try:
-                    cv2.imwrite(str(DEBUG_DIR / f"{image_path.stem}_{vname}.png"), vfunc(cropped))
+                    cv2.imwrite(str(_debug_dir / f"{image_path.stem}_{vname}.png"), vfunc(cropped))
                 except Exception:
                     pass
 
@@ -888,11 +904,11 @@ def extract_username_from_image(image_path, use_gpu=True, save_debug=False, use_
 
         if use_vlm:
             # VLM-Primary Architecture
-            vlm_username, vlm_confidence, vlm_metadata = vlm_primary_extract(cropped)
-            
-            if save_debug:
+            vlm_username, vlm_confidence, vlm_metadata = vlm_primary_extract(cropped, vlm_model=_vlm_model)
+
+            if save_debug and _debug_dir is not None:
                 # Save VLM response for diagnostics
-                vlm_debug_path = DEBUG_DIR / f"{image_path.stem}_vlm_response.txt"
+                vlm_debug_path = _debug_dir / f"{image_path.stem}_vlm_response.txt"
                 with open(vlm_debug_path, 'w', encoding='utf-8') as f:
                     f.write(f"Username: {vlm_username}\n")
                     f.write(f"Confidence: {vlm_confidence}\n")
@@ -945,10 +961,10 @@ def extract_username_from_image(image_path, use_gpu=True, save_debug=False, use_
                     ocr_username, ocr_confidence, ocr_diag
                 )
             
-            if save_debug:
+            if save_debug and _debug_dir is not None:
                 # Save consensus decision for diagnostics
                 import json
-                consensus_path = DEBUG_DIR / f"{image_path.stem}_consensus.json"
+                consensus_path = _debug_dir / f"{image_path.stem}_consensus.json"
                 consensus_data = {
                     'vlm_result': {'username': vlm_username, 'confidence': vlm_confidence},
                     'ocr_result': {'username': ocr_username, 'confidence': ocr_confidence},
@@ -1310,7 +1326,8 @@ def main():
     
     use_gpu = hardware_info['gpu_available']
     args_list = [
-        (path, idx, len(image_paths), existing_usernames, use_gpu, diagnostics, use_vlm)
+        (path, idx, len(image_paths), existing_usernames, use_gpu, diagnostics, use_vlm,
+         str(OUTPUT_DIR), str(DEBUG_DIR), VLM_MODEL)
         for idx, path in enumerate(image_paths, 1)
     ]
     
