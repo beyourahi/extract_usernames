@@ -66,16 +66,6 @@ notion_sync_report.md
 # User configuration (stored in home directory)
 # .config/extract-usernames/
 
-# Test output
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.nox/
-coverage.xml
-*.cover
-.hypothesis/
-
 # Type checking
 .mypy_cache/
 .dmypy.json

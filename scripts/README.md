@@ -196,28 +196,6 @@ pip install -e ".[dev]"
 extract-usernames --version
 ```
 
-### Testing Setup Scripts
-
-To test setup scripts in a clean environment:
-
-```bash
-# Create virtual environment
-python3 -m venv test_env
-source test_env/bin/activate  # macOS/Linux
-# or
-.\test_env\Scripts\Activate   # Windows
-
-# Run setup
-./scripts/setup.sh
-
-# Test CLI
-extract-usernames --version
-
-# Cleanup
-deactivate
-rm -rf test_env
-```
-
 ---
 
 ## Environment Variables

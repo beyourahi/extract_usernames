@@ -1,6 +1,6 @@
 # Instagram Username Extractor
 
-**Fast, accurate Instagram username extraction from screenshots using dual-engine OCR (VLM + EasyOCR).**
+**Instagram username extraction from screenshots using dual-engine OCR (VLM + EasyOCR).**
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -25,6 +25,7 @@ extract-usernames --input ~/Desktop/screenshots --output ~/results
 ```
 
 **First-time setup wizard** saves your preferences for future runs. Reconfigure anytime:
+
 ```bash
 extract-usernames --reconfigure
 ```
@@ -91,18 +92,21 @@ extract_usernames/
 ### Install Ollama (Recommended)
 
 **macOS:**
+
 ```bash
 brew install ollama
 ollama pull glm-ocr:bf16
 ```
 
 **Linux:**
+
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ollama pull glm-ocr:bf16
 ```
 
 **Windows:**
+
 ```powershell
 # Download from https://ollama.com/download
 ollama pull glm-ocr:bf16
@@ -203,14 +207,14 @@ Options:
 
 Your Notion database must have these properties:
 
-| Property Name | Type | Required | Description |
-|--------------|------|----------|-------------|
-| **Brand Name** | Title | ✅ | Instagram username |
-| **Social Media Account** | URL | ✅ | Profile link |
-| **Status** | Status/Select | ✅ | "Didn't Approach", "Approached", etc. |
-| Business Type | Multi-select | ⚪ | Optional categorization |
-| Payment System | Status/Select | ⚪ | Optional payment tracking |
-| Amount | Number | ⚪ | Optional deal value |
+| Property Name            | Type          | Required | Description                           |
+| ------------------------ | ------------- | -------- | ------------------------------------- |
+| **Brand Name**           | Title         | ✅       | Instagram username                    |
+| **Social Media Account** | URL           | ✅       | Profile link                          |
+| **Status**               | Status/Select | ✅       | "Didn't Approach", "Approached", etc. |
+| Business Type            | Multi-select  | ⚪       | Optional categorization               |
+| Payment System           | Status/Select | ⚪       | Optional payment tracking             |
+| Amount                   | Number        | ⚪       | Optional deal value                   |
 
 ### Sync Behavior
 
@@ -226,30 +230,39 @@ Your Notion database must have these properties:
 All output files are saved to your configured output directory (default: `~/Desktop/leads/`):
 
 ### verified_usernames.md
+
 High-confidence extractions ready for use:
+
 ```markdown
 # Verified Usernames (10)
 
 ## 2026-02-07 17:30:15
+
 - brand_name_1
 - brand_name_2
-...
+  ...
 ```
 
 ### needs_review.md
+
 Low-confidence or potential duplicates requiring manual review:
+
 ```markdown
 # Usernames Needing Review (3)
 
 ## Low Confidence Extractions
+
 - possible_username ⚠️ Low OCR confidence
 
 ## Near Duplicates
+
 - similar_name_v2 ⚠️ Similar to: similar_name
 ```
 
 ### extraction_report.md
+
 Detailed performance metrics:
+
 ```markdown
 # Extraction Report
 
@@ -259,11 +272,13 @@ Detailed performance metrics:
 **Success Rate:** 94%
 
 ## Hardware
+
 - GPU: NVIDIA RTX 3080
 - Mode: VLM-Primary (GLM-OCR)
 ```
 
 ### cropped_usernames_images/ (Directory)
+
 **New in v2.0:** Cropped username regions saved in AVIF format for quality assurance and LLM batch processing:
 
 ```
@@ -274,6 +289,7 @@ cropped_usernames_images/
 ```
 
 **Features:**
+
 - **Always saved** (regardless of diagnostics mode)
 - **AVIF format** with quality 75 - optimal balance of text clarity and file size (50-80% smaller than PNG)
 - **One file per screenshot** - enables visual verification and LLM-based quality checks
@@ -310,6 +326,7 @@ Stored at `~/.config/extract-usernames/config.json`:
 ### Custom VLM Models
 
 Supports any Ollama-compatible vision model:
+
 ```bash
 # Install alternative model
 ollama pull minicpm-v:8b-2.6-q8_0
@@ -321,11 +338,13 @@ extract-usernames --vlm-model minicpm-v:8b-2.6-q8_0
 ### Diagnostics Mode
 
 Enables debug output and preserves intermediate files:
+
 ```bash
 extract-usernames --diagnostics
 ```
 
 Creates `debug/` directory with:
+
 - Raw OCR outputs
 - VLM responses
 - Preprocessed images
@@ -334,6 +353,7 @@ Creates `debug/` directory with:
 ### Batch Processing
 
 Process multiple screenshot folders:
+
 ```bash
 for folder in ~/Desktop/leads_*; do
   extract-usernames --input "$folder" --output "${folder}_results"
@@ -347,6 +367,7 @@ done
 ### Common Issues
 
 **VLM Not Available:**
+
 ```bash
 # Check Ollama is running
 ollama list
@@ -357,16 +378,19 @@ ollama serve
 ```
 
 **Low Accuracy:**
+
 - Ensure screenshots are clear and readable
 - Try diagnostics mode to inspect OCR output
 - Consider using VLM mode for better results
 
 **Notion Sync Fails:**
+
 - Verify integration has access to database
 - Check database schema matches requirements
 - Confirm token is valid
 
 **Config Not Saving:**
+
 ```bash
 # Check config directory exists
 mkdir -p ~/.config/extract-usernames
@@ -381,11 +405,11 @@ extract-usernames --reset-config
 
 ### Benchmarks
 
-| Hardware | Mode | Speed | Accuracy |
-|----------|------|-------|----------|
-| Apple M2 (Metal) | VLM | ~1s/image | 96% |
-| RTX 3080 (CUDA) | VLM | ~0.8s/image | 96% |
-| CPU Only | EasyOCR | ~3s/image | 88% |
+| Hardware         | Mode    | Speed       | Accuracy |
+| ---------------- | ------- | ----------- | -------- |
+| Apple M2 (Metal) | VLM     | ~1s/image   | 96%      |
+| RTX 3080 (CUDA)  | VLM     | ~0.8s/image | 96%      |
+| CPU Only         | EasyOCR | ~3s/image   | 88%      |
 
 ### Optimization Tips
 
@@ -412,12 +436,6 @@ pip install -e ".[dev]"
 - **OCR Layer** (`ocr/`) - VLM and OCR prompts
 - **Integration Layer** (`integrations/`) - External services
 - **Pipeline** (`main.py`) - Orchestrates extraction workflow
-
-### Running Tests
-
-```bash
-pytest tests/
-```
 
 ---
 
