@@ -236,3 +236,59 @@ cd extract_usernames
 ---
 
 **Production lead generation tool. Handle data responsibly. Follow API usage best practices.**
+
+---
+
+## Frontend UI Visual Verification (REQUIRED)
+
+**During any frontend UI or design work, you MUST use Playwright MCP to visually verify your changes.**
+
+### Workflow
+
+1. **Determine the active port** for this project before taking screenshots (see Port Detection below)
+2. **Take screenshots** via Playwright MCP targeting the correct `http://localhost:<port>`
+3. **Save to `tmp_screenshots/`** at the root of this repository
+4. **Analyze each screenshot** against the plan or requirements to verify accuracy
+5. **Iterate** — fix discrepancies, re-screenshot, re-analyze until requirements are met
+
+### Rules
+
+- **ALWAYS** take at least one screenshot per UI change before considering it done
+- **NEVER** mark frontend work as complete without visual verification
+- Screenshots go in `tmp_screenshots/` at the project root (create the directory if it doesn't exist)
+- Name screenshots descriptively: `tmp_screenshots/homepage-hero.png`, `tmp_screenshots/cart-drawer-open.png`
+- Take screenshots at multiple viewport sizes when responsive behavior matters (mobile + desktop)
+- After each batch of changes, compare the screenshots against the original requirements or design spec and explicitly state what matches and what still needs work
+
+### Port Detection
+
+Multiple dev servers may be running simultaneously across projects. **Always identify the correct port before screenshotting.**
+
+Detection order (use the first that works):
+
+1. **Check dev server output** — the terminal running `bun run dev` prints the active URL (e.g. `Local: http://localhost:4457`)
+2. **Check `vite.config.ts`** — look for an explicit `server.port` value
+3. **Check `package.json`** — some scripts hardcode a port via `--port` flag
+4. **Scan active ports** — run `lsof -i :3000-4999 | grep LISTEN` to see what's bound, then match the process to this project's directory
+
+**Never assume port 3000.** If multiple Vite/Hydrogen servers are running, confirm you're screenshotting the right one by checking the page title or a unique element.
+
+### Example Playwright MCP Usage
+
+```
+// First confirm the port (e.g. from dev server output: http://localhost:4457)
+navigate to http://localhost:4457
+take screenshot → tmp_screenshots/homepage-initial.png
+
+// After making changes, verify
+take screenshot → tmp_screenshots/homepage-after-fix.png
+// Analyze: does this match the requirement?
+```
+
+### What to Check in Screenshots
+
+- Layout matches the intended design/spec
+- Spacing, typography, and colors are correct
+- Interactive states (hover, focus, open/closed) render properly
+- No visible layout breaks or overflow issues
+- Responsive breakpoints behave as expected
