@@ -16,6 +16,8 @@
 - NEVER use destructive commands (`reset --hard`, `push --force`)
 - Always create NEW commits (never `--amend`)
 
+**Always break large tasks into focused scopes** — run parallel agents with git worktrees, each with a narrow, well-defined goal.
+
 ---
 
 ## Project Overview
