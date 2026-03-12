@@ -262,6 +262,7 @@ cd extract_usernames
 - Take screenshots at multiple viewport sizes when responsive behavior matters (mobile + desktop)
 - After each batch of changes, compare the screenshots against the original requirements or design spec and explicitly state what matches and what still needs work
 - **MANDATORY CLEANUP**: After every successful task implementation, if the `tmp_screenshots/` directory was created during the work, it must be deleted before the task is considered complete. Do not skip this step — it is a hard requirement.
+- **MANDATORY CLEANUP**: After every successful task implementation, if the `.playwright-mcp/` directory exists in the project root, it must be deleted before the task is considered complete. This directory is created by the Playwright MCP server during browser automation and is a transient artifact that must not persist in the codebase. Do not skip this step — it is a hard requirement.
 
 ### Port Detection
 
