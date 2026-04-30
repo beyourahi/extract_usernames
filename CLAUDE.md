@@ -296,3 +296,7 @@ take screenshot → tmp_screenshots/homepage-after-fix.png
 - Interactive states (hover, focus, open/closed) render properly
 - No visible layout breaks or overflow issues
 - Responsive breakpoints behave as expected
+
+### Commit Message Rules
+
+- **Never include AI agent co-authors** — commit messages must not reference any AI agent (Claude, ChatGPT, Gemini, GitHub Copilot, or similar) in `Co-Authored-By` trailers or any other form.
