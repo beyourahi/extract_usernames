@@ -33,24 +33,6 @@ After `CLAUDE.md` is finalised, update `AGENTS.md` to match:
 - Keep both files structurally in sync — same sections, same order
 - Preserve any AGENTS.md-specific phrasing that targets non-Claude agents
 
-## Step 4: Show All Proposed Changes
+## Step 4: Apply Changes
 
-Present a unified diff for both files before editing anything:
-
-```
-### CLAUDE.md
-\`\`\`diff
-- [removed]
-+ [added]
-\`\`\`
-
-### AGENTS.md
-\`\`\`diff
-- [removed]
-+ [added]
-\`\`\`
-```
-
-## Step 5: Apply Changes
-
-Apply all proposed changes immediately. Edit `CLAUDE.md` first, then `AGENTS.md`. No approval needed.
+Apply all changes immediately. Edit `CLAUDE.md` first, then `AGENTS.md`. No previews, no approval needed.
