@@ -1,9 +1,5 @@
 # Extract Usernames
 
-## Always Do First
-
-**Invoke the `frontend-design` skill** before writing any frontend code, every session, no exceptions.
-
 ## Git Workflow -- READ FIRST
 
 **NEVER CREATE BRANCHES.** Direct commits to main. No feature branches, no development branches.
@@ -35,7 +31,7 @@ Instagram username extraction from screenshots via dual-engine OCR (VLM-primary,
 | OCR | Ollama + GLM-OCR (VLM-primary), EasyOCR (fallback), OpenCV preprocessing |
 | ML | PyTorch (GPU: CUDA/ROCm/MPS/CPU) |
 | Integration | Notion API client, Instagram validation, Tenacity retry logic |
-| Packaging | setuptools + pyproject.toml, editable install |
+| Packaging | setuptools + pyproject.toml, editable install (`instagram-username-extractor` v2.0.0) |
 
 ---
 
@@ -62,7 +58,7 @@ extract_usernames/
 **Key patterns:**
 - Config: `~/.config/extract-usernames/config.json` (JSON, sections: `directories`, `extraction`, `notion`)
 - Command: `extract-usernames` (installed via setuptools)
-- Package name: `extract_usernames` (underscored)
+- Package name: `extract_usernames` (underscored), dist name: `instagram-username-extractor`
 - Entry point: `extract_usernames.cli:main`
 
 **Data flow:**
@@ -84,8 +80,11 @@ extract_usernames/
 
 # Run
 extract-usernames              # Interactive mode (uses saved config)
-extract-usernames --input ~/screenshots --output ~/results
+extract-usernames ~/screenshots                    # Positional input path
+extract-usernames ~/screenshots --output ~/results
 extract-usernames --reconfigure                    # Update settings
+extract-usernames --show-config                    # Display current config
+extract-usernames --reset-config                   # Reset to defaults
 extract-usernames --notion-sync                    # Sync + auto-deduplicate
 extract-usernames --notion-sync --dry-run-dedup    # Preview deduplication
 extract-usernames --no-deduplicate                 # Skip deduplication
@@ -110,7 +109,7 @@ cd extract_usernames
 ./scripts/setup.sh  # or setup.ps1 on Windows (runs pip install -e .)
 ```
 
-**Dependencies:** `click>=8.1.0`, `torch`, `easyocr`, `opencv-python`, `numpy`, `notion-client`, `tenacity`
+**Dependencies:** `click>=8.1.0`, `torch`, `easyocr`, `opencv-python`, `numpy`, `notion-client`, `tenacity`, `ollama>=0.1.0`, `pillow-avif-plugin`
 **VLM:** Ollama + `glm-ocr:bf16` model (optional, recommended)
 **Config:** `.env` (optional, or use interactive prompts)
 
@@ -121,12 +120,16 @@ cd extract_usernames
 **Priority:** CLI flags > saved config > prompts > defaults
 
 **Key flags:**
-- `--input PATH`, `--output PATH` - Directories
+- `input_path` (positional, optional) - Input directory
+- `--output PATH` / `-o PATH` - Output directory
 - `--vlm-model MODEL` - VLM model (default: `glm-ocr:bf16`)
 - `--no-vlm` - EasyOCR-only mode
 - `--diagnostics` - Debug files
 - `--reconfigure` - Update config
+- `--show-config` - Display current config and exit
+- `--reset-config` - Reset configuration to defaults
 - `--notion-sync` - Force Notion sync
+- `--no-notion-sync` - Skip Notion sync
 - `--deduplicate` / `--no-deduplicate` - Auto-deduplicate Notion (default: on)
 - `--dry-run-dedup` - Preview deduplication without removing
 - `--version`, `--help`
@@ -159,6 +162,7 @@ cd extract_usernames
 - Import order: stdlib → third-party → local
 - Specific exceptions with helpful messages
 - Focused, single-purpose modules
+- Line length: 100 (Black formatter)
 
 ---
 
@@ -241,62 +245,6 @@ cd extract_usernames
 
 ---
 
-## Frontend UI Visual Verification (REQUIRED)
-
-**During any frontend UI or design work, you MUST use Playwright MCP to visually verify your changes.**
-
-### Workflow
-
-1. **Determine the active port** for this project before taking screenshots (see Port Detection below)
-2. **Take screenshots** via Playwright MCP targeting the correct `http://localhost:<port>`
-3. **Save to `tmp_screenshots/`** at the root of this repository
-4. **Analyze each screenshot** against the plan or requirements to verify accuracy
-5. **Iterate** — fix discrepancies, re-screenshot, re-analyze until requirements are met
-
-### Rules
-
-- **ALWAYS** take at least one screenshot per UI change before considering it done
-- **NEVER** mark frontend work as complete without visual verification
-- Screenshots go in `tmp_screenshots/` at the project root (create the directory if it doesn't exist)
-- Name screenshots descriptively: `tmp_screenshots/homepage-hero.png`, `tmp_screenshots/cart-drawer-open.png`
-- Take screenshots at multiple viewport sizes when responsive behavior matters (mobile + desktop)
-- After each batch of changes, compare the screenshots against the original requirements or design spec and explicitly state what matches and what still needs work
-- **MANDATORY CLEANUP**: After every successful task implementation, if the `tmp_screenshots/` directory was created during the work, it must be deleted before the task is considered complete. Do not skip this step — it is a hard requirement.
-- **MANDATORY CLEANUP**: After every successful task implementation, if the `.playwright-mcp/` directory exists in the project root, it must be deleted before the task is considered complete. This directory is created by the Playwright MCP server during browser automation and is a transient artifact that must not persist in the codebase. Do not skip this step — it is a hard requirement.
-
-### Port Detection
-
-Multiple dev servers may be running simultaneously across projects. **Always identify the correct port before screenshotting.**
-
-Detection order (use the first that works):
-
-1. **Check dev server output** — the terminal running `bun run dev` prints the active URL (e.g. `Local: http://localhost:4457`)
-2. **Check `vite.config.ts`** — look for an explicit `server.port` value
-3. **Check `package.json`** — some scripts hardcode a port via `--port` flag
-4. **Scan active ports** — run `lsof -i :3000-4999 | grep LISTEN` to see what's bound, then match the process to this project's directory
-
-**Never assume port 3000.** If multiple Vite/Hydrogen servers are running, confirm you're screenshotting the right one by checking the page title or a unique element.
-
-### Example Playwright MCP Usage
-
-```
-// First confirm the port (e.g. from dev server output: http://localhost:4457)
-navigate to http://localhost:4457
-take screenshot → tmp_screenshots/homepage-initial.png
-
-// After making changes, verify
-take screenshot → tmp_screenshots/homepage-after-fix.png
-// Analyze: does this match the requirement?
-```
-
-### What to Check in Screenshots
-
-- Layout matches the intended design/spec
-- Spacing, typography, and colors are correct
-- Interactive states (hover, focus, open/closed) render properly
-- No visible layout breaks or overflow issues
-- Responsive breakpoints behave as expected
-
-### Commit Message Rules
+## Commit Message Rules
 
 - **Never include AI agent co-authors** — commit messages must not reference any AI agent (Claude, ChatGPT, Gemini, GitHub Copilot, or similar) in `Co-Authored-By` trailers or any other form.
