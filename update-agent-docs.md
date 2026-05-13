@@ -3,6 +3,14 @@ description: Update CLAUDE.md and AGENTS.md using session learnings and quality 
 allowed-tools: Read, Edit, Glob, Bash
 ---
 
+**EXECUTION MODE: FULLY AUTONOMOUS. DO NOT ASK FOR APPROVAL AT ANY POINT.**
+
+- Do not pause to confirm changes before making them.
+- Do not show diffs and ask "should I apply this?".
+- Do not ask "does this look good?" or "shall I proceed?".
+- Do not request review after each step — complete all 4 steps without interruption.
+- Edit files directly and immediately. If you find something to change, change it.
+
 Update both `CLAUDE.md` and `AGENTS.md` to reflect the current codebase state. Follow this sequence:
 
 ## Step 1: Capture Session Learnings (revise-claude-md)
@@ -35,4 +43,4 @@ After `CLAUDE.md` is finalised, update `AGENTS.md` to match:
 
 ## Step 4: Apply Changes
 
-Apply all changes immediately. Edit `CLAUDE.md` first, then `AGENTS.md`. No previews, no approval needed.
+Edit `CLAUDE.md` first, then `AGENTS.md`. Apply every change directly with the Edit tool — no previews, no summaries asking for confirmation, no pausing between files.

@@ -46,7 +46,7 @@ extract_usernames/
 ├── config.py                   # JSON config manager (~/.config/extract-usernames/config.json)
 ├── main.py                     # Extraction pipeline orchestrator
 ├── ocr/
-│   └── prompts.py             # Interactive setup wizard
+│   └── prompts.py             # CLI wizard (run_initial_setup, reconfigure_*, prompt_*) — NOT OCR prompts
 ├── integrations/
 │   ├── instagram_validator.py # Profile validation
 │   ├── notion_manager.py      # Notion API client
@@ -56,7 +56,7 @@ extract_usernames/
 ```
 
 **Key patterns:**
-- Config: `~/.config/extract-usernames/config.json` (JSON, sections: `directories`, `extraction`, `notion`)
+- Config: `~/.config/extract-usernames/config.json` (flat top-level keys + nested `notion` section)
 - Command: `extract-usernames` (installed via setuptools)
 - Package name: `extract_usernames` (underscored), dist name: `instagram-username-extractor`
 - Entry point: `extract_usernames.cli:main`
@@ -111,7 +111,7 @@ cd extract_usernames
 
 **Dependencies:** `click>=8.1.0`, `torch`, `easyocr`, `opencv-python`, `numpy`, `notion-client`, `tenacity`, `ollama>=0.1.0`, `pillow-avif-plugin`
 **VLM:** Ollama + `glm-ocr:bf16` model (optional, recommended)
-**Config:** `.env` (optional, or use interactive prompts)
+**Config:** Interactive setup wizard on first run, persisted to `~/.config/extract-usernames/config.json`
 
 ---
 
@@ -145,13 +145,24 @@ cd extract_usernames
 
 ```json
 {
-  "directories": {"input": "...", "output": "..."},
-  "extraction": {"use_vlm": true, "vlm_model": "glm-ocr:bf16", "diagnostics": false, "workers": null},
-  "notion": {"enabled": true, "token": "secret_xxx", "database_id": "xxx"}
+  "input_dir": "/Users/.../Desktop/screenshots",
+  "output_dir": "/Users/.../Desktop/leads",
+  "vlm_enabled": true,
+  "vlm_model": "glm-ocr:bf16",
+  "diagnostics": false,
+  "workers": null,
+  "notion": {
+    "enabled": false,
+    "token": "",
+    "database_id": "",
+    "validation_delay": 2.0,
+    "skip_validation": false,
+    "auto_sync": false
+  }
 }
 ```
 
-**Config API:** `extract_usernames.config.ConfigManager` - load(), save(), get(), merge_with_args()
+**Config API:** `extract_usernames.config.ConfigManager` — `load()`, `save()`, `update()`, `reset()`, `delete()`, `exists()`, `display()`, `get_config_path()`. Missing keys deep-merge with `DEFAULT_CONFIG` on load.
 
 ---
 
@@ -163,6 +174,7 @@ cd extract_usernames
 - Specific exceptions with helpful messages
 - Focused, single-purpose modules
 - Line length: 100 (Black formatter)
+- **Dev tooling** (optional extras, configured in `pyproject.toml`): `pip install -e ".[dev]"` then `black .`, `isort .`, `mypy extract_usernames/`, `flake8`. mypy excludes `_archive/`.
 
 ---
 
@@ -210,11 +222,12 @@ cd extract_usernames
 **Config corruption:** Invalid JSON breaks CLI → delete `~/.config/extract-usernames/config.json` and re-run setup
 **Ollama:** CLI checks availability, auto-falls back to EasyOCR
 **Cross-platform paths:** Use `pathlib.Path` everywhere (Windows backslashes vs Unix forward slashes)
-**GPU memory:** Use `--workers 1` if exhausting VRAM
+**GPU memory:** VLM mode caps workers at 2 automatically; set `"workers": 1` in config (or pass `workers=1` to `run_extraction`) if still exhausting VRAM
 **Notion rate limits:** Built-in retry logic (tenacity), ~3 req/sec limit
 **Deduplication safety:** Entries archived (not deleted), restorable from Notion trash
 **AVIF crops:** Saved to `cropped_usernames_images/` subdirectory (always-on), requires `pillow-avif-plugin` dependency
 **Config versioning:** No migration logic yet (TODO v3.0)
+**Legacy extractor:** Core extraction logic still lives in `extract_usernames/_archive/extract_usernames.py` — `main.py` imports it as `from ._archive import extract_usernames as extractor`. ROI constants (`TOP_OFFSET=165`, `CROP_HEIGHT=90`, `LEFT_MARGIN=100`, `RIGHT_MARGIN=100`) and output filenames live there, not in `main.py`.
 
 ---
 
@@ -234,6 +247,7 @@ cd extract_usernames
 **Extended guides:**
 - `README.md` - Installation, usage examples, benchmarks, Notion setup
 - `CONTRIBUTING.md` - Contribution guidelines
+- `update-agent-docs.md` - Autonomous workflow to sync CLAUDE.md ↔ AGENTS.md (runs without approval prompts)
 
 **Repository:** https://github.com/beyourahi/extract_usernames
 **Author:** [@beyourahi](https://github.com/beyourahi)
