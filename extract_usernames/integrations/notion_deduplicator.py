@@ -1,7 +1,8 @@
-"""Notion Database Deduplicator.
+"""Group Notion pages by Instagram URL and archive losers via quality scoring.
 
-Intelligently finds and merges duplicate entries in Notion database based on Instagram URLs.
-Picks the best username from duplicates using smart scoring.
+The "best" username in a duplicate group is chosen by `_score_username`, not
+by recency. Losers are archived (`archived=True`) — Notion treats this as soft
+delete; restorable from trash for ~30 days.
 
 Author: Rahi Khan (Dropout Studio)
 License: MIT
@@ -18,195 +19,167 @@ from notion_client.errors import APIResponseError
 
 
 class NotionDeduplicator:
-    """Smart deduplication for Notion database entries."""
-    
+    # Notion published rate limit is ~3 req/sec; 0.35s gap keeps us under it
+    # with a safety margin. Single-threaded enforcement only — not safe for
+    # concurrent dedup runs against the same DB.
     RATE_LIMIT_DELAY = 0.35
-    
+
     def __init__(self, client: Client, database_id: str, data_source_id: str):
-        """Initialize deduplicator.
-        
-        Args:
-            client: Initialized Notion client
-            database_id: Database ID
-            data_source_id: Data source ID (collection ID)
-        """
+        """`data_source_id` is the new Notion data_sources API surface (≠ database_id
+        for multi-source DBs). Caller must resolve it via
+        `NotionDatabaseManager._get_data_source_id()`."""
         self.client = client
         self.database_id = database_id
         self.data_source_id = data_source_id
         self.logger = logging.getLogger(__name__)
         self._last_request_time = 0
-    
+
     def _enforce_rate_limit(self):
-        """Enforce rate limiting between API calls."""
+        # Residual-sleep gate; see InstagramValidator._enforce_rate_limit for
+        # identical pattern.
         if self._last_request_time > 0:
             elapsed = time.time() - self._last_request_time
             if elapsed < self.RATE_LIMIT_DELAY:
                 time.sleep(self.RATE_LIMIT_DELAY - elapsed)
         self._last_request_time = time.time()
-    
+
     def _score_username(self, username: str) -> int:
-        """Score a username to determine quality.
-        
-        Higher score = better username
-        
-        Scoring criteria:
-        - Penalize numeric prefixes like "1.", "2."
-        - Reward alphabetic characters
-        - Reward proper length (not too short)
-        - Reward lowercase (Instagram standard)
-        
-        Args:
-            username: Username to score
-            
-        Returns:
-            Quality score (higher is better)
+        """Heuristic quality score. Higher = better username to keep.
+
+        Score components (additive unless noted):
+        - `^\\d+\\.?$` (purely "1.", "2", etc.): hard floor -1000, returned early.
+        - starts with digit: -50
+        - starts with alpha: +100
+        - alpha char ratio * 50 (rounded)
+        - length in [3, 30]: +50, else -20
+        - +2 * min(len, 15) length reward, capped at +30
+        - lowercase (ignoring _ and .): +10
+
+        Special cases worth knowing:
+        - Mostly-alpha lowercase 5-char names cluster around score ~190.
+        - Pure-digit pages and OCR garbage like "1." get filtered to -1000.
         """
         if not username:
             return 0
-        
+
         score = 0
-        
-        # Heavy penalty for numeric-only or malformed usernames
-        if re.match(r'^\d+\.?$', username):  # "1.", "2", etc.
+
+        if re.match(r'^\d+\.?$', username):
             return -1000
-        
-        # Penalty for starting with numbers
+
         if username[0].isdigit():
             score -= 50
-        
-        # Reward for starting with letter
+
         if username[0].isalpha():
             score += 100
-        
-        # Reward for having mostly alphabetic characters
+
         alpha_ratio = sum(c.isalpha() for c in username) / len(username)
         score += int(alpha_ratio * 50)
-        
-        # Reward for reasonable length (3-30 chars is typical for Instagram)
+
         if 3 <= len(username) <= 30:
             score += 50
         else:
             score -= 20
-        
-        # Reward longer usernames (within reason)
+
+        # Length reward saturates at 15 chars — prevents long garbage strings
+        # from dominating short clean ones.
         score += min(len(username), 15) * 2
-        
-        # Small reward for lowercase (Instagram standard)
+
+        # Lowercase check ignores . and _ separators so "user_name" still wins.
         if username.islower() or username.replace('_', '').replace('.', '').islower():
             score += 10
-        
+
         return score
-    
+
     def _pick_best_username(self, entries: List[Dict]) -> Tuple[str, str]:
-        """Pick the best username and page_id from a list of duplicate entries.
-        
-        Args:
-            entries: List of page entries with same URL
-            
-        Returns:
-            Tuple of (best_page_id, best_username)
-        """
+        """Returns `(best_page_id, best_username)`. Ties broken by iteration order."""
         best_score = -9999
         best_entry = None
-        
+
         for entry in entries:
             username = entry['username']
             score = self._score_username(username)
-            
+
             self.logger.debug(f"Username '{username}' scored: {score}")
-            
+
             if score > best_score:
                 best_score = score
                 best_entry = entry
-        
+
         return best_entry['page_id'], best_entry['username']
-    
+
     def find_duplicates(self, property_names: Dict[str, str]) -> Dict[str, List[Dict]]:
-        """Find all duplicate entries grouped by Instagram URL.
-        
-        Args:
-            property_names: Mapping of logical names to actual property names
-                           {'title': 'Brand Name', 'url': 'Social Media Account'}
-        
-        Returns:
-            Dictionary mapping URLs to list of entries:
-            {
-                'https://instagram.com/user1': [
-                    {'page_id': '...', 'username': 'user1', 'url': '...'},
-                    {'page_id': '...', 'username': '1.', 'url': '...'}
-                ]
-            }
+        """Paginate the data source, group rows by URL property, return groups with len > 1.
+
+        `property_names` keys: 'title' (defaults "Brand Name"), 'url' (defaults
+        "Social Media Account"). Entries with empty/None URL are silently dropped.
+        Pagination uses Notion's `start_cursor` / `has_more` protocol with 100 rows/page.
+        On query exception the partial result is returned (logged, not raised).
         """
         title_prop = property_names.get('title', 'Brand Name')
         url_prop = property_names.get('url', 'Social Media Account')
-        
-        # Collect all pages
+
         url_to_entries = defaultdict(list)
         has_more = True
         start_cursor = None
-        
+
         self.logger.info("🔍 Scanning database for duplicates...")
-        
+
         while has_more:
             self._enforce_rate_limit()
-            
+
             query_params = {"page_size": 100}
             if start_cursor:
                 query_params["start_cursor"] = start_cursor
-            
+
             try:
                 response = self.client.data_sources.query(
                     data_source_id=self.data_source_id,
                     **query_params
                 )
             except Exception as e:
+                # Partial-result return: caller still sees what we found so far.
                 self.logger.error(f"Error querying data source: {e}")
                 break
-            
+
             for page in response.get("results", []):
                 page_id = page.get("id")
                 props = page.get("properties", {})
-                
-                # Get username (title property)
+
+                # Notion title is a list of rich_text spans; we take the first
+                # span's plain_text and treat the rest as decoration.
                 username_prop = props.get(title_prop, {})
                 title_list = username_prop.get("title", [])
                 username = ""
                 if title_list:
                     username = title_list[0].get("plain_text", "")
-                    # Handle None safely
+                    # `plain_text` can be literal None for empty cells — `str.strip()` would crash.
                     username = username.strip() if username else ""
-                
-                # Get URL - handle None values!
+
+                # URL property is `{'url': str | None}`; explicit None coalesce
+                # before strip to handle blank-URL rows.
                 url_prop_data = props.get(url_prop, {})
                 url = url_prop_data.get("url")
-                # Convert None to empty string, then strip
                 url = (url or "").strip()
-                
-                # Only track entries with URLs
+
+                # Entries without a URL can't be deduped by URL — skip silently.
                 if url:
                     url_to_entries[url].append({
                         'page_id': page_id,
                         'username': username,
                         'url': url
                     })
-            
+
             has_more = response.get("has_more", False)
             start_cursor = response.get("next_cursor")
-        
-        # Filter to only duplicates (URLs with more than one entry)
+
+        # Singletons (len == 1) are dropped — only groups with collisions matter.
         duplicates = {url: entries for url, entries in url_to_entries.items() if len(entries) > 1}
-        
+
         return duplicates
-    
+
     def archive_page(self, page_id: str) -> bool:
-        """Archive (soft delete) a page.
-        
-        Args:
-            page_id: Page ID to archive
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Soft delete (Notion `archived=True`). Restorable from Notion trash."""
         try:
             self._enforce_rate_limit()
             self.client.pages.update(
@@ -217,16 +190,13 @@ class NotionDeduplicator:
         except APIResponseError as e:
             self.logger.error(f"Failed to archive page {page_id}: {e}")
             return False
-    
+
     def deduplicate(self, property_names: Dict[str, str], dry_run: bool = False) -> Dict[str, int]:
-        """Find and remove duplicates from the database.
-        
-        Args:
-            property_names: Property name mappings
-            dry_run: If True, only report duplicates without removing
-            
-        Returns:
-            Statistics dictionary
+        """End-to-end: find groups → pick winner → archive losers.
+
+        `dry_run=True` skips the archive call but still reports what would happen.
+        Returns stats: `total_entries` (currently always 0 — bug, never populated),
+        `duplicate_groups`, `duplicates_found` (len-1 per group), `duplicates_removed`, `errors`.
         """
         stats = {
             'total_entries': 0,
@@ -235,35 +205,32 @@ class NotionDeduplicator:
             'duplicates_removed': 0,
             'errors': 0,
         }
-        
-        # Find duplicates
+
         duplicates = self.find_duplicates(property_names)
-        
+
         stats['duplicate_groups'] = len(duplicates)
-        
+
         if not duplicates:
             self.logger.info("✅ No duplicates found!")
             return stats
-        
-        # Process each duplicate group
+
         for url, entries in duplicates.items():
-            stats['duplicates_found'] += len(entries) - 1  # -1 because we keep one
-            
+            # -1 because the winner is kept; only losers count as "found duplicates".
+            stats['duplicates_found'] += len(entries) - 1
+
             self.logger.info(f"\n📍 Found {len(entries)} duplicates for: {url}")
-            
-            # Pick the best entry
+
             best_page_id, best_username = self._pick_best_username(entries)
-            
+
             self.logger.info(f"   ✅ Keeping: '{best_username}' (score: {self._score_username(best_username)})")
-            
-            # Archive the others
+
             for entry in entries:
                 if entry['page_id'] == best_page_id:
-                    continue  # Skip the one we're keeping
-                
+                    continue
+
                 username = entry['username']
                 score = self._score_username(username)
-                
+
                 if dry_run:
                     self.logger.info(f"   🗑️  Would remove: '{username}' (score: {score})")
                 else:
@@ -273,7 +240,7 @@ class NotionDeduplicator:
                     else:
                         self.logger.error(f"   ❌ Failed to remove: '{username}'")
                         stats['errors'] += 1
-        
+
         return stats
 
 
@@ -284,19 +251,13 @@ def run_deduplication(
     property_names: Dict[str, str],
     dry_run: bool = False,
 ) -> Dict[str, int]:
-    """Run deduplication workflow.
-    
-    Args:
-        token: Notion integration token
-        database_id: Notion database ID
-        data_source_id: Data source ID (collection ID)
-        property_names: Property name mappings
-        dry_run: If True, only report without removing
-        
-    Returns:
-        Statistics dictionary
+    """Module-level convenience: instantiate client + deduplicator + invoke `.deduplicate`.
+
+    Distinct from the (currently-broken) `NotionDeduplicator.run_deduplication`
+    call site in cli_merge_duplicates.py — that one passes `keep_strategy`
+    which this code path does not support.
     """
     client = Client(auth=token)
     deduplicator = NotionDeduplicator(client, database_id, data_source_id)
-    
+
     return deduplicator.deduplicate(property_names, dry_run=dry_run)

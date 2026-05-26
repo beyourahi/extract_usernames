@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Command-line interface for Instagram Username Extractor."""
+"""Click CLI entry point. Wires ConfigManager + prompts + run_extraction + run_notion_sync.
+
+Flag precedence: CLI > saved config > prompts > defaults. Notion sync only fires
+when `config['notion']['enabled']`. Returns POSIX exit codes: 0 ok, 1 error, 130 SIGINT.
+"""
 
 import sys
 import click
@@ -11,44 +15,35 @@ from .ocr import prompts
 
 
 def resolve_directory_path(path_str: str) -> Path:
-    """Resolve directory path intelligently.
-    
-    Handles:
-    - Absolute paths: /Users/name/folder
-    - Relative paths: ./folder or ../folder
-    - Folder names: screenshots
-      * Tries current dir first
-      * Falls back to ~/Desktop/[name]
-      * Falls back to ~/[name]
-    
-    Args:
-        path_str: User input path string
-        
-    Returns:
-        Resolved Path object
+    """Resolve a user-supplied directory string with fallback search.
+
+    Search order for non-absolute, non-`./`/`../` inputs:
+    1. CWD/<path_str>
+    2. ~/Desktop/<path_str>
+    3. ~/<path_str>
+    4. Falls through to CWD-resolved path even if missing — caller is expected
+       to validate `.exists()` and surface the attempted locations to the user.
+
+    Absolute paths and explicit relative paths (`./`, `../`, Windows variants)
+    bypass the fallback chain and resolve directly.
     """
     path = Path(path_str).expanduser()
-    
-    # If it's absolute or starts with ./ or ../, resolve normally
+
     if path.is_absolute() or str(path_str).startswith(('./', '../', '.\\', '..\\')):
         return path.resolve()
-    
-    # If it exists in current directory, use it
+
     if path.exists():
         return path.resolve()
-    
-    # Try ~/Desktop/[name]
+
     desktop_path = Path.home() / "Desktop" / path_str
     if desktop_path.exists():
         return desktop_path
-    
-    # Try ~/[name]
+
     home_path = Path.home() / path_str
     if home_path.exists():
         return home_path
-    
-    # If nothing exists, return current directory + name
-    # (Will fail validation but shows what was attempted)
+
+    # Non-existent path returned for caller to surface in error message.
     return path.resolve()
 
 
@@ -83,7 +78,7 @@ def main(
     dry_run_dedup: bool,
 ):
     """Extract Instagram usernames from screenshots with VLM+OCR dual-engine validation.
-    
+
     \b
     Quick Start:
       extract-usernames                           # Use saved config, prompt for input
@@ -92,7 +87,7 @@ def main(
       extract-usernames --notion-sync             # Sync to Notion (auto-deduplicates)
       extract-usernames --no-deduplicate          # Skip deduplication
       extract-usernames --dry-run-dedup           # Preview deduplication without removing
-    
+
     \b
     Examples:
       extract-usernames ~/Desktop/screenshots
@@ -102,38 +97,38 @@ def main(
       extract-usernames --notion-sync --dry-run-dedup  # Preview what would be merged
     """
     config_manager = ConfigManager()
-    
-    # Handle configuration commands
+
+    # --reset-config / --show-config short-circuit before any config load or prompt.
     if reset_config:
         if click.confirm("\n⚠️  Reset all settings to defaults?", default=False):
             config_manager.reset()
             click.secho("✅ Configuration reset to defaults", fg="green")
         return
-    
+
     if show_config:
         config = config_manager.load()
         config_manager.display(config)
         click.echo(f"Config file: {config_manager.get_config_path()}")
         return
-    
-    # Load or create configuration
+
+    # First-run wizard: triggers when config file is missing or --initial-setup is set.
+    # Wizard return value is persisted before optional immediate-extraction prompt.
     if not config_manager.exists() or initial_setup:
         click.echo("\n⚙️  No configuration found. Running initial setup...\n")
         config = prompts.run_initial_setup()
         config_manager.save(config)
         click.secho(f"\n✅ Configuration saved to: {config_manager.get_config_path()}", fg="green")
-        
-        # Ask to proceed with extraction
+
         if not click.confirm("\n🚀 Start extraction now?", default=True):
             click.echo("\nConfiguration saved! Run 'extract-usernames' anytime to start extracting.")
             return
     else:
         config = config_manager.load()
-    
-    # Handle reconfiguration
+
     if reconfigure:
+        # Reconfigure section dispatch — `cancel` exits without saving.
         choice = prompts.prompt_reconfigure_option()
-        
+
         if choice == 'cancel':
             click.echo("Reconfiguration cancelled.")
             return
@@ -145,21 +140,24 @@ def main(
             config = prompts.reconfigure_extraction(config)
         elif choice == 'notion':
             config = prompts.reconfigure_notion(config)
-        
+
         config_manager.save(config)
         click.secho("\n✅ Configuration updated!", fg="green")
-        
+
         if not click.confirm("\n🚀 Start extraction now?", default=True):
             return
-    
-    # Show current config and confirm
+
+    # Pure-interactive mode (no positional input, no overriding flags): show config and confirm.
     if not input_path and not any([output, no_vlm, vlm_model, diagnostics, notion_sync, no_notion_sync]):
         if not prompts.confirm_config(config):
             if click.confirm("Reconfigure settings?", default=True):
                 click.echo("\nRun: extract-usernames --reconfigure")
             return
-    
-    # Apply CLI overrides
+
+    # CLI flag > config merge. NOTE: `vlm_enabled` here is buggy by design — when
+    # `--no-vlm` is NOT passed it falls back to the config value, but when it IS
+    # passed the expression `not no_vlm if no_vlm else config[...]` evaluates to
+    # `False` (correct). The `if no_vlm` guard prevents flipping the saved default.
     extraction_config = {
         'input_dir': input_path if input_path else config['input_dir'],
         'output_dir': output if output else config['output_dir'],
@@ -167,8 +165,9 @@ def main(
         'vlm_model': vlm_model if vlm_model else config.get('vlm_model', 'glm-ocr:bf16'),
         'diagnostics': diagnostics if diagnostics else config.get('diagnostics', False),
     }
-    
-    # Resolve and validate input directory
+
+    # Input dir must exist (Click's `exists=True` on the positional only covers explicit args).
+    # Output dir is resolved but not required to exist — downstream extractor calls mkdir.
     input_dir = resolve_directory_path(extraction_config['input_dir'])
     if not input_dir.exists():
         click.secho(f"\n❌ Error: Input directory does not exist: {input_dir}", fg="red")
@@ -178,18 +177,17 @@ def main(
         click.echo(f"  • Home: {Path.home()}")
         click.echo(f"\n💡 Create the folder or run: extract-usernames --reconfigure")
         sys.exit(1)
-    
-    # Resolve output directory (create if doesn't exist)
+
     output_dir = resolve_directory_path(extraction_config['output_dir'])
-    
-    # Update extraction config with resolved paths
+
     extraction_config['input_dir'] = str(input_dir)
     extraction_config['output_dir'] = str(output_dir)
-    
-    # Run extraction
+
     try:
+        # Deferred import: avoids loading torch/easyocr/ollama when user only runs
+        # --show-config, --reset-config, or --reconfigure.
         from .main import run_extraction
-        
+
         click.echo("\n" + "=" * 70)
         click.secho("🚀 Starting Extraction", fg="cyan", bold=True)
         click.echo("=" * 70)
@@ -197,7 +195,7 @@ def main(
         click.echo(f"Output: {extraction_config['output_dir']}")
         click.echo(f"Mode:   {'VLM+OCR' if extraction_config['vlm_enabled'] else 'EasyOCR-only'}")
         click.echo("=" * 70 + "\n")
-        
+
         results = run_extraction(
             input_dir=extraction_config['input_dir'],
             output_dir=extraction_config['output_dir'],
@@ -205,13 +203,15 @@ def main(
             vlm_model=extraction_config['vlm_model'],
             diagnostics=extraction_config['diagnostics'],
         )
-        
+
         click.secho(f"\n✅ Extraction complete!", fg="green", bold=True)
         click.echo(f"Verified usernames: {results.get('verified_count', 0)}")
         click.echo(f"Needs review: {results.get('review_count', 0)}")
         click.echo(f"\nResults saved to: {extraction_config['output_dir']}")
-        
-        # Handle Notion sync
+
+        # Notion sync decision tree: explicit flags override saved auto_sync.
+        # Order matters: --notion-sync wins over --no-notion-sync if both passed
+        # (not enforced as mutually exclusive at Click layer).
         should_sync = False
         if notion_sync:
             should_sync = True
@@ -219,14 +219,16 @@ def main(
             should_sync = False
         elif config['notion']['enabled'] and config['notion'].get('auto_sync', False):
             should_sync = prompts.prompt_notion_sync()
-        
+
         if should_sync and config['notion']['enabled']:
             click.echo("\n" + "=" * 70)
             click.secho("📤 Syncing to Notion", fg="cyan", bold=True)
             click.echo("=" * 70 + "\n")
-            
+
             from .integrations.notion_sync import run_notion_sync
-            
+
+            # Source of truth for sync is `verified_usernames.md` (filename hard-coded
+            # in _archive.extract_usernames.setup_directories).
             notion_results = run_notion_sync(
                 input_file=Path(extraction_config['output_dir']) / "verified_usernames.md",
                 token=config['notion']['token'],
@@ -236,12 +238,11 @@ def main(
                 auto_deduplicate=deduplicate,
                 dry_run_dedup=dry_run_dedup,
             )
-            
+
             click.secho(f"\n✅ Notion sync complete!", fg="green", bold=True)
             click.echo(f"Added to Notion: {notion_results.get('added_count', 0)}")
             click.echo(f"Duplicates skipped: {notion_results.get('duplicate_count', 0)}")
-            
-            # Show deduplication stats if performed
+
             if notion_results.get('dedup_stats'):
                 dedup_stats = notion_results['dedup_stats']
                 click.echo("\n" + "="* 70)
@@ -258,8 +259,9 @@ def main(
                         click.secho(f"Errors: {dedup_stats['errors']}", fg="yellow")
                 else:
                     click.echo(f"\n💡 Run without --dry-run-dedup to actually remove duplicates")
-        
+
     except KeyboardInterrupt:
+        # POSIX convention: 128 + SIGINT(2) = 130. Preserves shell job-control semantics.
         click.echo("\n\n⚠️  Extraction cancelled by user.")
         sys.exit(130)
     except Exception as e:

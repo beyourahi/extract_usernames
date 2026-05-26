@@ -1,8 +1,15 @@
-"""Instagram Username Validator.
+"""Instagram profile existence check via unauthenticated HTTP GET.
 
-Validates Instagram usernames by making HTTP requests to profile URLs.
-Implements retry logic, rate limiting, and comprehensive error handling.
+Heuristic: a 200 response whose final URL is NOT `/accounts/login` ≈ public
+profile exists. 404 ≈ doesn't exist. Redirect to login ≈ exists-but-private
+or rate-limited; treated as non-existent because we can't confirm.
 
+Two retry layers operate together:
+- urllib3 `Retry`: transport-level retries on 429/5xx with backoff_factor=1.
+- tenacity: exception-level retries on RequestException/Timeout, exponential
+  wait min 2s max 10s, 3 attempts, reraise on final failure.
+
+Use as a context manager to ensure the requests.Session is closed.
 Author: Rahi Khan (Dropout Studio)
 License: MIT
 """
@@ -24,24 +31,28 @@ from tenacity import (
 
 
 class InstagramValidator:
-    """Validates Instagram usernames via HTTP requests."""
-    
     BASE_URL = "https://www.instagram.com"
-    
+
+    # Rotated round-robin by `_request_count % len(USER_AGENTS)`. Not real
+    # anti-detection — just enough to avoid trivial UA-based blocks.
     USER_AGENTS = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
     ]
-    
+
     def __init__(self, delay_between_requests: float = 2.0):
+        # `delay_between_requests` is enforced as a MINIMUM gap between requests
+        # by `_enforce_rate_limit`, not a fixed sleep.
         self.delay = delay_between_requests
         self.session = self._create_session()
         self.logger = logging.getLogger(__name__)
         self._last_request_time = 0
         self._request_count = 0
-    
+
     def _create_session(self) -> requests.Session:
+        # urllib3 Retry config: separate from the tenacity decorator on
+        # `_make_request`. Transport-layer retries on these status codes only.
         session = requests.Session()
         retry_strategy = Retry(
             total=3,
@@ -57,19 +68,24 @@ class InstagramValidator:
         session.mount("http://", adapter)
         session.mount("https://", adapter)
         return session
-    
+
     def _sanitize_username(self, username: str) -> str:
+        # Whitelist: alnum + `.` + `_`. Strips leading `@`, drops everything
+        # else, lowercases. Returns '' for inputs with no valid chars — caller
+        # must check before issuing a request.
         username = username.strip().lstrip('@')
         username = ''.join(c for c in username if c.isalnum() or c in '._')
         return username.lower()
-    
+
     def _enforce_rate_limit(self):
+        # Time-since-last-request gate. Sleeps only the residual to reach
+        # `self.delay`; back-to-back fast requests aren't double-throttled.
         if self._last_request_time > 0:
             elapsed = time.time() - self._last_request_time
             if elapsed < self.delay:
                 time.sleep(self.delay - elapsed)
         self._last_request_time = time.time()
-    
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -77,6 +93,8 @@ class InstagramValidator:
         reraise=True
     )
     def _make_request(self, username: str) -> requests.Response:
+        # `allow_redirects=True` is intentional — we inspect `response.url`
+        # to detect login-wall redirects (see validate_username).
         url = f"{self.BASE_URL}/{quote(username)}/"
         headers = {
             "User-Agent": self.USER_AGENTS[self._request_count % len(self.USER_AGENTS)],
@@ -85,11 +103,17 @@ class InstagramValidator:
         }
         response = self.session.get(url, headers=headers, timeout=10, allow_redirects=True)
         return response
-    
+
     def validate_username(self, username: str) -> Dict[str, any]:
+        """Returns dict with keys: username, exists, url, status_code, error.
+
+        `exists=True` only when status_code==200 AND final URL didn't redirect
+        to `/accounts/login`. All exception paths set `error` and return
+        normally (never raise) — callers can filter on `result['exists']`.
+        """
         sanitized = self._sanitize_username(username)
         url = f"{self.BASE_URL}/{sanitized}/"
-        
+
         result = {
             'username': sanitized,
             'exists': False,
@@ -97,17 +121,19 @@ class InstagramValidator:
             'status_code': None,
             'error': None
         }
-        
+
         if not sanitized:
             result['error'] = "Invalid username format"
             return result
-        
+
         try:
             self._enforce_rate_limit()
             response = self._make_request(sanitized)
             result['status_code'] = response.status_code
-            
+
             if response.status_code == 200:
+                # Redirect to /accounts/login indicates Instagram is gating the
+                # profile (private account, anti-scraping, or session required).
                 if '/accounts/login' not in response.url:
                     result['exists'] = True
                 else:
@@ -116,31 +142,32 @@ class InstagramValidator:
                 result['error'] = "Account not found"
             else:
                 result['error'] = f"Status: {response.status_code}"
-            
+
             self._request_count += 1
-            
+
         except requests.Timeout:
             result['error'] = "Request timeout"
         except requests.RequestException as e:
             result['error'] = f"Request failed: {str(e)}"
         except Exception as e:
             result['error'] = f"Unexpected error: {str(e)}"
-        
+
         return result
-    
+
     def validate_batch(self, usernames: List[str]) -> List[Dict]:
+        # Sequential — concurrent validation would defeat the rate-limit.
         results = []
         for username in usernames:
             result = self.validate_username(username)
             results.append(result)
         return results
-    
+
     def close(self):
         if self.session:
             self.session.close()
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
